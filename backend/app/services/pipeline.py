@@ -14,6 +14,18 @@ from fastapi import BackgroundTasks
 
 from ..config import ConfigManager, config_manager
 from ..models.generation import GenerationJob, GenerationRequest, JobStatus, StepStatus
+from .agents import (
+    Agent1Output,
+    Agent2Output,
+    Agent3Output,
+    Agent4Output,
+    AppTypeClassificationAgent,
+    ComponentSelectionAgent,
+    DataFlowDesignAgent,
+    RequirementsDecompositionAgent,
+    ValidatorAgent,
+)
+from .agents.catalog import get_ui_parts_catalog
 from .jobs import JobRegistry, job_registry
 from .llm_factory import llm_factory
 from .packaging import PackagingService
@@ -88,28 +100,19 @@ class GenerationPipeline:
                 message="要件を受理しました",
             )
             self._notify(job_id, progress_callback)
-            self._jobs.update_status(
-                job_id,
-                step_id="mock_agent",
-                job_status=JobStatus.SPEC_GENERATING,
-                step_status=StepStatus.RUNNING,
-                message="モック仕様を生成しています",
-            )
-            self._notify(job_id, progress_callback)
-            agent = self._llm_factory.create_mock_agent(request.mock_spec_id)
-            spec = agent.generate_spec(request.mock_spec_id)
+
+            # Check if we should use mock or LLM mode
+            use_mock = self._config_manager.features.agents.use_mock
+
+            if use_mock:
+                spec = self._run_mock_pipeline(job_id, request, progress_callback, workspace)
+            else:
+                spec = self._run_llm_pipeline(job_id, request, progress_callback, workspace)
+
             (workspace / "spec.json").write_text(
                 json.dumps(spec, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-            self._jobs.update_status(
-                job_id,
-                step_id="mock_agent",
-                job_status=JobStatus.SPEC_GENERATING,
-                step_status=StepStatus.COMPLETED,
-                message="モック仕様の生成が完了しました",
-            )
-            self._notify(job_id, progress_callback)
 
             self._jobs.update_status(
                 job_id,
@@ -226,6 +229,291 @@ class GenerationPipeline:
             "config": self._config_manager.export_metadata(),
         }
         return metadata
+
+    def _run_mock_pipeline(
+        self,
+        job_id: str,
+        request: GenerationRequest,
+        progress_callback: Callable[[GenerationJob], None] | None,
+        workspace: Path,
+    ) -> Dict[str, Any]:
+        """Run the mock agent pipeline (Phase 1 mode)."""
+        self._jobs.update_status(
+            job_id,
+            step_id="mock_agent",
+            job_status=JobStatus.SPEC_GENERATING,
+            step_status=StepStatus.RUNNING,
+            message="モック仕様を生成しています",
+        )
+        self._notify(job_id, progress_callback)
+        agent = self._llm_factory.create_mock_agent(request.mock_spec_id)
+        spec = agent.generate_spec(request.mock_spec_id)
+        self._jobs.update_status(
+            job_id,
+            step_id="mock_agent",
+            job_status=JobStatus.SPEC_GENERATING,
+            step_status=StepStatus.COMPLETED,
+            message="モック仕様の生成が完了しました",
+        )
+        self._notify(job_id, progress_callback)
+        return spec
+
+    def _run_llm_pipeline(
+        self,
+        job_id: str,
+        request: GenerationRequest,
+        progress_callback: Callable[[GenerationJob], None] | None,
+        workspace: Path,
+    ) -> Dict[str, Any]:
+        """Run the LLM agent pipeline (Phase 2 mode)."""
+        ui_catalog = get_ui_parts_catalog()
+
+        # Agent 1: Requirements Decomposition
+        self._jobs.update_status(
+            job_id,
+            step_id="agent1_requirements",
+            job_status=JobStatus.SPEC_GENERATING,
+            step_status=StepStatus.RUNNING,
+            message="要件を分解しています",
+        )
+        self._notify(job_id, progress_callback)
+        agent1 = RequirementsDecompositionAgent()
+        agent1_output = agent1.run({"description": request.description})
+        self._jobs.update_status(
+            job_id,
+            step_id="agent1_requirements",
+            job_status=JobStatus.SPEC_GENERATING,
+            step_status=StepStatus.COMPLETED,
+            message="要件分解が完了しました",
+        )
+        self._notify(job_id, progress_callback)
+
+        # Agent 2: App Type Classification
+        self._jobs.update_status(
+            job_id,
+            step_id="agent2_classification",
+            job_status=JobStatus.SPEC_GENERATING,
+            step_status=StepStatus.RUNNING,
+            message="アプリタイプを分類しています",
+        )
+        self._notify(job_id, progress_callback)
+        agent2 = AppTypeClassificationAgent()
+        agent2_output = agent2.run(
+            {
+                "requirements": [req.model_dump() for req in agent1_output.requirements],
+                "summary": agent1_output.summary,
+            }
+        )
+        self._jobs.update_status(
+            job_id,
+            step_id="agent2_classification",
+            job_status=JobStatus.SPEC_GENERATING,
+            step_status=StepStatus.COMPLETED,
+            message=f"アプリタイプを分類しました: {agent2_output.app_type.value}",
+        )
+        self._notify(job_id, progress_callback)
+
+        # Agent 3: Component Selection (with retry logic)
+        max_retries = 3
+        agent3_output = None
+        validator_output = None
+
+        for retry_count in range(max_retries):
+            step_id = f"agent3_selection" if retry_count == 0 else f"agent3_selection_retry_{retry_count}"
+            self._jobs.update_status(
+                job_id,
+                step_id=step_id,
+                job_status=JobStatus.SPEC_GENERATING,
+                step_status=StepStatus.RUNNING,
+                message=f"コンポーネントを選択しています{' (再試行 ' + str(retry_count) + ')' if retry_count > 0 else ''}",
+            )
+            self._notify(job_id, progress_callback)
+
+            agent3 = ComponentSelectionAgent(ui_parts_catalog=ui_catalog)
+            agent3_output = agent3.run(
+                {
+                    "requirements": [req.model_dump() for req in agent1_output.requirements],
+                    "app_type": agent2_output.app_type.value,
+                }
+            )
+            self._jobs.update_status(
+                job_id,
+                step_id=step_id,
+                job_status=JobStatus.SPEC_GENERATING,
+                step_status=StepStatus.COMPLETED,
+                message="コンポーネント選択が完了しました",
+            )
+            self._notify(job_id, progress_callback)
+
+            # Agent 4: Data Flow Design
+            self._jobs.update_status(
+                job_id,
+                step_id="agent4_dataflow",
+                job_status=JobStatus.SPEC_GENERATING,
+                step_status=StepStatus.RUNNING,
+                message="データフローを設計しています",
+            )
+            self._notify(job_id, progress_callback)
+            agent4 = DataFlowDesignAgent()
+            agent4_output = agent4.run(
+                {
+                    "requirements": [req.model_dump() for req in agent1_output.requirements],
+                    "app_type": agent2_output.app_type.value,
+                    "components": [comp.model_dump() for comp in agent3_output.components],
+                }
+            )
+            self._jobs.update_status(
+                job_id,
+                step_id="agent4_dataflow",
+                job_status=JobStatus.SPEC_GENERATING,
+                step_status=StepStatus.COMPLETED,
+                message="データフロー設計が完了しました",
+            )
+            self._notify(job_id, progress_callback)
+
+            # Validator
+            self._jobs.update_status(
+                job_id,
+                step_id="validator",
+                job_status=JobStatus.SPEC_GENERATING,
+                step_status=StepStatus.RUNNING,
+                message="仕様を検証しています",
+            )
+            self._notify(job_id, progress_callback)
+            validator = ValidatorAgent(ui_parts_catalog=ui_catalog)
+            validator_output = validator.run(
+                {
+                    "requirements": [req.model_dump() for req in agent1_output.requirements],
+                    "app_type": agent2_output.app_type.value,
+                    "components": [comp.model_dump() for comp in agent3_output.components],
+                    "data_flow": [step.model_dump() for step in agent4_output.data_flow],
+                }
+            )
+            self._jobs.update_status(
+                job_id,
+                step_id="validator",
+                job_status=JobStatus.SPEC_GENERATING,
+                step_status=validator_output.is_valid and StepStatus.COMPLETED or StepStatus.RUNNING,
+                message="検証が完了しました" if validator_output.is_valid else f"検証エラー: {len(validator_output.errors)}件",
+            )
+            self._notify(job_id, progress_callback)
+
+            if validator_output.is_valid:
+                break
+
+            # If validation failed and we have retries left, prepare feedback for Agent 3
+            if retry_count < max_retries - 1:
+                logger.warning(
+                    "Validation failed (attempt %d/%d). Retrying Agent 3 with error feedback.",
+                    retry_count + 1,
+                    max_retries,
+                )
+                # In a more sophisticated implementation, we could pass validation errors to Agent 3
+                # For now, we just retry
+            else:
+                # All retries exhausted
+                error_messages = [f"{err.rule}: {err.message}" for err in validator_output.errors]
+                raise ValueError(f"Validation failed after {max_retries} attempts. Errors: {', '.join(error_messages)}")
+
+        if not validator_output or not validator_output.is_valid:
+            raise ValueError("Specification validation failed")
+
+        # Convert agent outputs to specification format
+        spec = self._convert_to_spec_format(
+            agent1_output, agent2_output, agent3_output, agent4_output, request
+        )
+        return spec
+
+    def _convert_to_spec_format(
+        self,
+        agent1: Agent1Output,
+        agent2: Agent2Output,
+        agent3: Agent3Output,
+        agent4: Agent4Output,
+        request: GenerationRequest,
+    ) -> Dict[str, Any]:
+        """Convert agent outputs to the specification format expected by templates."""
+        # Build forms from components
+        forms = []
+        components_by_step: Dict[int, list] = {}
+        for comp in agent3.components:
+            step = comp.position.step
+            if step not in components_by_step:
+                components_by_step[step] = []
+            components_by_step[step].append(comp)
+
+        for step_num, components in sorted(components_by_step.items()):
+            fields = []
+            for comp in components:
+                field: Dict[str, Any] = {
+                    "name": comp.component_id,
+                    "label": comp.props.label or comp.component_id,
+                    "type": comp.props.type or comp.component_id.split("_")[0],
+                }
+                if comp.props.placeholder:
+                    field["placeholder"] = comp.props.placeholder
+                if comp.props.required is not None:
+                    field["required"] = comp.props.required
+                if comp.props.options:
+                    field["options"] = comp.props.options
+                fields.append(field)
+
+            if fields:
+                forms.append({"step": step_num, "title": f"Step {step_num}", "fields": fields})
+
+        # Build backend routes from data flow
+        routes = []
+        for flow_step in agent4.data_flow:
+            if flow_step.api_call:
+                route: Dict[str, Any] = {
+                    "path": flow_step.api_call.get("path", "/api/endpoint"),
+                    "method": flow_step.api_call.get("method", "POST"),
+                    "summary": flow_step.api_call.get("summary", ""),
+                }
+                routes.append(route)
+
+        spec: Dict[str, Any] = {
+            "app": {
+                "name": request.project_name,
+                "slug": request.project_id,
+                "summary": request.description,
+                "version": "0.1.0",
+                "owner": {
+                    "team": "Generated",
+                    "contact": request.user_id,
+                },
+            },
+            "frontend": {
+                "wizard": {
+                    "steps": ["要件入力", "設計プレビュー", "UI モック承認", "テンプレート生成", "バックエンド設定", "テスト準備", "成果物ダウンロード"],
+                    "primary_color": "#1976d2",
+                    "accent_color": "#009688",
+                },
+                "forms": forms,
+            },
+            "backend": {
+                "routes": routes,
+                "models": [],
+                "validation_rules": [],
+            },
+            "tests": {
+                "playwright": {
+                    "scenarios": [
+                        {
+                            "name": "wizard-happy-path",
+                            "description": "Completes the wizard and downloads the generated zip",
+                        }
+                    ],
+                },
+            },
+            "docker": {
+                "services": [
+                    {"name": "web", "description": "React frontend"},
+                    {"name": "api", "description": "FastAPI backend"},
+                ],
+            },
+        }
+        return spec
 
     def _notify(
         self,

@@ -53,6 +53,12 @@ class LLMProviderConfig(BaseModel):
     api_key: Optional[str] = None
 
 
+class AzureOpenAIProviderConfig(LLMProviderConfig):
+    endpoint: Optional[str] = None
+    deployment_name: Optional[str] = None
+    api_version: str = "2024-02-15-preview"
+
+
 class LLMDefaults(BaseModel):
     model: str
     temperature: float = 0.0
@@ -62,7 +68,7 @@ class LLMConfig(BaseModel):
     provider: str
     defaults: LLMDefaults
     mocks: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
-    providers: Dict[str, LLMProviderConfig] = Field(default_factory=dict)
+    providers: Dict[str, Any] = Field(default_factory=dict)  # Can be LLMProviderConfig or AzureOpenAIProviderConfig
 
 
 class DifyEnvironmentConfig(BaseModel):
@@ -105,12 +111,22 @@ class ConfigManager:
             return self._bundle
 
         features = self._load_yaml(self._features_path)
-        llm = self._load_yaml(self._llm_path)
+        llm_raw = self._load_yaml(self._llm_path)
         dify = self._load_yaml(self._dify_path)
+
+        # Convert provider configs to appropriate types
+        providers: Dict[str, Any] = {}
+        if "providers" in llm_raw:
+            for key, value in llm_raw["providers"].items():
+                if key == "azure_openai":
+                    providers[key] = AzureOpenAIProviderConfig(**value)
+                else:
+                    providers[key] = LLMProviderConfig(**value)
+        llm_raw["providers"] = providers
 
         bundle = ConfigBundle(
             features=FeatureConfig(**features),
-            llm=LLMConfig(**llm),
+            llm=LLMConfig(**llm_raw),
             dify=DifyConfig(**dify),
         )
         self._bundle = bundle

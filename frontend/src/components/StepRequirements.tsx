@@ -85,7 +85,7 @@ export function StepRequirements({ onSubmit, loading, error }: Props) {
     <Box component="form" onSubmit={submit} sx={{ display: "grid", gap: 3 }}>
       <input type="hidden" value={defaultValues.mock_spec_id} {...register("mock_spec_id")} />
       <Typography variant="body1">
-        Phase 1 ではモック仕様書を用いて請求書検証アプリを生成します。基本情報を入力し「生成を開始」を押してください。
+        Phase 2 では自然言語で要件を記述することで、LLMエージェントが自動的にアプリケーション仕様を生成します。基本情報とアプリの概要を入力し「生成を開始」を押してください。
       </Typography>
 
       <Grid container spacing={2}>
@@ -121,12 +121,13 @@ export function StepRequirements({ onSubmit, loading, error }: Props) {
       />
 
       <TextField
-        label="概要"
+        label="アプリの概要（自然言語で記述）"
         multiline
-        minRows={3}
+        minRows={5}
+        placeholder="例: 請求書をアップロードして、金額や日付などを検証し、問題があればエラーを表示するアプリを作成したい"
         disabled={loading}
         error={Boolean(helper.description)}
-        helperText={helper.description}
+        helperText={helper.description || "自然言語でアプリの要件を詳しく記述してください"}
         {...register("description")}
       />
 

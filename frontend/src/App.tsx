@@ -26,6 +26,13 @@ const stepLabels = [
 const STEP_NAME_MAP: Record<string, string> = {
   requirements: "要件受付",
   mock_agent: "モック仕様",
+  agent1_requirements: "要件分解",
+  agent2_classification: "アプリタイプ分類",
+  agent3_selection: "コンポーネント選択",
+  agent3_selection_retry_1: "コンポーネント選択（再試行1）",
+  agent3_selection_retry_2: "コンポーネント選択（再試行2）",
+  agent4_dataflow: "データフロー設計",
+  validator: "仕様検証",
   preview: "プレビュー",
   template_generation: "テンプレート生成",
   backend_setup: "バックエンド構築",
@@ -138,7 +145,7 @@ export default function App() {
               モック生成ウィザード
             </Typography>
             <Typography variant="subtitle1" color="text.secondary">
-              Phase 1 (MVP) の要件に基づき、モック仕様からテンプレートベースの成果物を生成します。
+              Phase 2 (LLM統合) では、自然言語要件からLLMエージェントが動的にアプリケーション仕様を生成します。
             </Typography>
           </Box>
 

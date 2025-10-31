@@ -1,7 +1,7 @@
 provider: mock
 
 defaults:
-  model: gpt-4.1-mini
+  model: gpt-4o-mini
   temperature: 0.0
 
 mocks:
@@ -16,4 +16,10 @@ providers:
   openai:
     enabled: false
     api_key: ""
+  azure_openai:
+    enabled: false
+    api_key: ""
+    endpoint: ""
+    deployment_name: ""
+    api_version: "2024-02-15-preview"
 

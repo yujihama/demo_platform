@@ -1,0 +1,243 @@
+components:
+  - id: text_input
+    name: Text Input
+    description: Single-line text input field
+    applicable_types:
+      - TYPE_CRUD
+      - TYPE_DOCUMENT_PROCESSOR
+      - TYPE_VALIDATION
+      - TYPE_ANALYTICS
+    props:
+      label:
+        type: string
+        required: true
+        description: Label for the input field
+      placeholder:
+        type: string
+        required: false
+        description: Placeholder text
+      required:
+        type: boolean
+        required: false
+        default: false
+      type:
+        type: string
+        required: false
+        options: [text, email, password, tel, url]
+        default: text
+
+  - id: textarea
+    name: Textarea
+    description: Multi-line text input field
+    applicable_types:
+      - TYPE_CRUD
+      - TYPE_DOCUMENT_PROCESSOR
+      - TYPE_VALIDATION
+    props:
+      label:
+        type: string
+        required: true
+      placeholder:
+        type: string
+        required: false
+      required:
+        type: boolean
+        required: false
+        default: false
+      rows:
+        type: number
+        required: false
+        default: 4
+
+  - id: number_input
+    name: Number Input
+    description: Numeric input field
+    applicable_types:
+      - TYPE_CRUD
+      - TYPE_VALIDATION
+      - TYPE_ANALYTICS
+    props:
+      label:
+        type: string
+        required: true
+      placeholder:
+        type: string
+        required: false
+      required:
+        type: boolean
+        required: false
+        default: false
+      min:
+        type: number
+        required: false
+      max:
+        type: number
+        required: false
+      step:
+        type: number
+        required: false
+
+  - id: select
+    name: Select Dropdown
+    description: Dropdown selection field
+    applicable_types:
+      - TYPE_CRUD
+      - TYPE_DOCUMENT_PROCESSOR
+      - TYPE_VALIDATION
+    props:
+      label:
+        type: string
+        required: true
+      options:
+        type: array
+        required: true
+        description: List of option values
+      required:
+        type: boolean
+        required: false
+        default: false
+
+  - id: date_input
+    name: Date Input
+    description: Date picker input field
+    applicable_types:
+      - TYPE_CRUD
+      - TYPE_DOCUMENT_PROCESSOR
+      - TYPE_VALIDATION
+    props:
+      label:
+        type: string
+        required: true
+      required:
+        type: boolean
+        required: false
+        default: false
+      min_date:
+        type: string
+        required: false
+      max_date:
+        type: string
+        required: false
+
+  - id: file_upload
+    name: File Upload
+    description: File upload input field
+    applicable_types:
+      - TYPE_DOCUMENT_PROCESSOR
+      - TYPE_VALIDATION
+    props:
+      label:
+        type: string
+        required: true
+      accept:
+        type: string
+        required: false
+        description: MIME types (e.g., "image/*,application/pdf")
+      required:
+        type: boolean
+        required: false
+        default: false
+      multiple:
+        type: boolean
+        required: false
+        default: false
+
+  - id: button
+    name: Button
+    description: Clickable button component
+    applicable_types:
+      - TYPE_CRUD
+      - TYPE_DOCUMENT_PROCESSOR
+      - TYPE_VALIDATION
+      - TYPE_ANALYTICS
+      - TYPE_CHATBOT
+    props:
+      label:
+        type: string
+        required: true
+      variant:
+        type: string
+        required: false
+        options: [primary, secondary, outlined, text]
+        default: primary
+      disabled:
+        type: boolean
+        required: false
+        default: false
+
+  - id: submit_button
+    name: Submit Button
+    description: Form submission button
+    applicable_types:
+      - TYPE_CRUD
+      - TYPE_DOCUMENT_PROCESSOR
+      - TYPE_VALIDATION
+    props:
+      label:
+        type: string
+        required: false
+        default: "Submit"
+      variant:
+        type: string
+        required: false
+        options: [primary, secondary]
+        default: primary
+
+  - id: display_text
+    name: Display Text
+    description: Static text display component
+    applicable_types:
+      - TYPE_CRUD
+      - TYPE_DOCUMENT_PROCESSOR
+      - TYPE_VALIDATION
+      - TYPE_ANALYTICS
+      - TYPE_CHATBOT
+    props:
+      text:
+        type: string
+        required: true
+      variant:
+        type: string
+        required: false
+        options: [body1, body2, h1, h2, h3, h4, h5, h6]
+        default: body1
+
+  - id: display_table
+    name: Data Table
+    description: Table for displaying structured data
+    applicable_types:
+      - TYPE_CRUD
+      - TYPE_DOCUMENT_PROCESSOR
+      - TYPE_VALIDATION
+      - TYPE_ANALYTICS
+    props:
+      columns:
+        type: array
+        required: true
+        description: Array of column definitions with id, label, type
+      data_source:
+        type: string
+        required: true
+        description: API endpoint or state variable name
+      pagination:
+        type: boolean
+        required: false
+        default: false
+
+  - id: validation_result
+    name: Validation Result
+    description: Display validation results or errors
+    applicable_types:
+      - TYPE_VALIDATION
+    props:
+      result_type:
+        type: string
+        required: false
+        options: [success, error, warning, info]
+      message:
+        type: string
+        required: true
+      show_details:
+        type: boolean
+        required: false
+        default: false
