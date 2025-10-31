@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <title>Invoice Verification Preview</title>
+    <style>
+      body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        margin: 0;
+        background: #f5f7fb;
+        color: #1b1d21;
+      }
+      header {
+        background: linear-gradient(135deg, #1976d2, #009688);
+        color: white;
+        padding: 32px 40px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 28px;
+      }
+      .subtitle {
+        opacity: 0.9;
+        margin-top: 8px;
+      }
+      .container {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 24px;
+        padding: 32px 40px;
+      }
+      .card {
+        background: white;
+        border-radius: 16px;
+        box-shadow: 0 12px 24px rgba(25, 118, 210, 0.1);
+        padding: 24px;
+      }
+      .card h2 {
+        margin-top: 0;
+        color: #1976d2;
+      }
+      .chip {
+        display: inline-block;
+        background: rgba(25, 118, 210, 0.1);
+        color: #1976d2;
+        border-radius: 999px;
+        padding: 6px 16px;
+        margin-right: 8px;
+        margin-bottom: 8px;
+        font-size: 13px;
+      }
+      ul {
+        padding-left: 20px;
+      }
+      li {
+        margin-bottom: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Invoice Verification Assistant</h1>
+      <div class="subtitle">請求書を自動検証し、検証結果をダッシュボードで提示する React + FastAPI アプリケーション</div>
+    </header>
+    <section class="container">
+      <article class="card">
+        <h2>ウィザードステップ</h2>
+        <div class="chip">要件入力</div>
+        <div class="chip">設計プレビュー</div>
+        <div class="chip">UI モック承認</div>
+        <div class="chip">テンプレート生成</div>
+        <div class="chip">バックエンド設定</div>
+        <div class="chip">テスト準備</div>
+        <div class="chip">成果物ダウンロード</div>
+      </article>
+      <article class="card">
+        <h2>検証ルール</h2>
+        <ul>
+          <li>請求書番号の重複チェック</li>
+          <li>金額 1,000,000 円以上の支払いを危険度 "Critical" としてフラグ</li>
+          <li>ベンダーごとのクレジットスコア参照</li>
+        </ul>
+      </article>
+      <article class="card">
+        <h2>生成成果物</h2>
+        <ul>
+          <li>React フロントエンド (MUI Stepper)</li>
+          <li>FastAPI バックエンド + Pydantic モデル</li>
+          <li>Playwright E2E テスト + Faker テストデータ</li>
+          <li>Dockerfile / docker-compose / logging 設定</li>
+        </ul>
+      </article>
+    </section>
+  </body>
+</html>
+

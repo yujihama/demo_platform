@@ -1,0 +1,15 @@
+import axios from "axios";
+
+export type InvoicePayload = {
+  invoiceNumber: string;
+  vendorName: string;
+  amount: number;
+  currency: string;
+  issueDate: string;
+};
+
+export async function verifyInvoice(payload: InvoicePayload) {
+  const response = await axios.post("/api/invoice/verify", payload);
+  return response.data;
+}
+

@@ -1,0 +1,100 @@
+{
+  "app": {
+    "name": "Invoice Verification Assistant",
+    "slug": "invoice-verification",
+    "summary": "Mock workflow that validates uploaded invoices against business rules and flags anomalies for finance teams.",
+    "version": "0.1.0",
+    "owner": {
+      "team": "Finance Automation",
+      "contact": "automation@example.com"
+    }
+  },
+  "frontend": {
+    "wizard": {
+      "steps": [
+        "要件入力",
+        "設計プレビュー",
+        "UI モック承認",
+        "テンプレート生成",
+        "バックエンド設定",
+        "テスト準備",
+        "成果物ダウンロード"
+      ],
+      "primary_color": "#1976d2",
+      "accent_color": "#009688"
+    },
+    "forms": [
+      {
+        "step": 1,
+        "title": "請求書情報",
+        "fields": [
+          { "name": "invoiceNumber", "label": "請求書番号", "type": "text", "required": true },
+          { "name": "vendorName", "label": "ベンダー名", "type": "text", "required": true },
+          { "name": "amount", "label": "金額", "type": "number", "required": true },
+          { "name": "currency", "label": "通貨", "type": "select", "options": ["JPY", "USD", "EUR"], "required": true },
+          { "name": "issueDate", "label": "発行日", "type": "date", "required": true }
+        ]
+      }
+    ],
+    "preview": {
+      "html": "mock/previews/invoice_preview.html"
+    }
+  },
+  "backend": {
+    "routes": [
+      {
+        "path": "/api/invoice/verify",
+        "method": "POST",
+        "summary": "Validate invoice information and return validation report",
+        "response_model": "InvoiceValidationResponse"
+      }
+    ],
+    "models": [
+      {
+        "name": "InvoiceSchema",
+        "fields": [
+          { "name": "invoice_number", "type": "str" },
+          { "name": "vendor_name", "type": "str" },
+          { "name": "amount", "type": "float" },
+          { "name": "currency", "type": "str" },
+          { "name": "issue_date", "type": "date" }
+        ]
+      }
+    ],
+    "validation_rules": [
+      {
+        "id": "duplicate-check",
+        "description": "Check if invoice number already exists in the ledger",
+        "severity": "warning"
+      },
+      {
+        "id": "amount-threshold",
+        "description": "Flag invoices above 1,000,000 JPY",
+        "severity": "critical"
+      }
+    ]
+  },
+  "tests": {
+    "playwright": {
+      "scenarios": [
+        {
+          "name": "wizard-happy-path",
+          "description": "Completes the wizard and downloads the generated zip"
+        }
+      ]
+    }
+  },
+  "docker": {
+    "services": [
+      {
+        "name": "web",
+        "description": "React frontend"
+      },
+      {
+        "name": "api",
+        "description": "FastAPI backend"
+      }
+    ]
+  }
+}
+

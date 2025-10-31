@@ -1,0 +1,194 @@
+import { useMemo, useState } from "react";
+import {
+  Box,
+  Button,
+  Container,
+  CssBaseline,
+  Paper,
+  Step,
+  StepLabel,
+  Stepper,
+  TextField,
+  Typography,
+  FormControl,
+  InputLabel,
+  MenuItem,
+  Select,
+} from "@mui/material";
+import { verifyInvoice } from "./api";
+
+const wizardSteps = {{ spec.frontend.wizard.steps | tojson }} as string[];
+const formFields = {{ spec.frontend.forms[0].fields | tojson }} as Array<any>;
+
+const layoutSx = { py: 4, bgcolor: "#f5f7fb", minHeight: "100vh" };
+const paperSx = { p: 4, mt: 3 };
+const innerBoxSx = { mt: 4 };
+const formGridSx = { display: "grid", gap: 2 };
+const resultPreStyle = { background: "#f4f6fb", padding: "16px", borderRadius: "8px" };
+const footerSx = { mt: 4, display: "flex", justifyContent: "space-between" };
+
+export default function App() {
+  const [activeStep, setActiveStep] = useState(0);
+  const [formValues, setFormValues] = useState<Record<string, any>>({
+    invoiceNumber: "",
+    vendorName: "",
+    amount: 0,
+    currency: "JPY",
+    issueDate: new Date().toISOString().slice(0, 10)
+  });
+  const [verificationResult, setVerificationResult] = useState<any | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const isLastStep = activeStep === wizardSteps.length - 1;
+
+  const canContinue = useMemo(() => {
+    return formFields.every((field) => {
+      if (!field.required) return true;
+      const value = formValues[field.name];
+      return value !== undefined && value !== "" && value !== null;
+    });
+  }, [formValues]);
+
+  const handleChange = (name: string, value: any) => {
+    setFormValues((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleNext = async () => {
+    if (activeStep === 1) {
+      setLoading(true);
+      try {
+        const result = await verifyInvoice({
+          invoiceNumber: formValues.invoiceNumber,
+          vendorName: formValues.vendorName,
+          amount: Number(formValues.amount),
+          currency: formValues.currency,
+          issueDate: formValues.issueDate
+        });
+        setVerificationResult(result);
+      } finally {
+        setLoading(false);
+      }
+    }
+    setActiveStep((prev) => prev + 1);
+  };
+
+  const handleBack = () => {
+    setActiveStep((prev) => prev - 1);
+  };
+
+  return (
+    <>
+      <CssBaseline />
+      <Box sx={layoutSx}>
+        <Container maxWidth="md">
+          <Typography variant="h4" component="h1" gutterBottom>
+            {{ spec.app.name }}
+          </Typography>
+          <Typography variant="subtitle1" color="text.secondary" gutterBottom>
+            {{ spec.app.summary }}
+          </Typography>
+
+          <Paper sx={paperSx} elevation={3}>
+            <Stepper activeStep={activeStep} alternativeLabel>
+              {wizardSteps.map((label) => (
+                <Step key={label}>
+                  <StepLabel>{label}</StepLabel>
+                </Step>
+              ))}
+            </Stepper>
+
+            <Box sx={innerBoxSx}>
+              {activeStep === 0 && (
+                <Box component="form" sx={formGridSx}>
+                  {formFields.map((field) => {
+                    if (field.type === "select") {
+                      return (
+                        <FormControl fullWidth key={field.name} required={field.required}>
+                          <InputLabel>{field.label}</InputLabel>
+                          <Select
+                            label={field.label}
+                            value={formValues[field.name] ?? ""}
+                            onChange={(event) => handleChange(field.name, event.target.value)}
+                          >
+                            {field.options?.map((option: string) => (
+                              <MenuItem value={option} key={option}>
+                                {option}
+                              </MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                      );
+                    }
+
+                    return (
+                      <TextField
+                        key={field.name}
+                        label={field.label}
+                        type={field.type === "number" ? "number" : field.type}
+                        required={field.required}
+                        value={formValues[field.name] ?? ""}
+                        onChange={(event) => handleChange(field.name, event.target.value)}
+                        fullWidth
+                      />
+                    );
+                  })}
+                </Box>
+              )}
+
+              {activeStep === 1 && (
+                <Box>
+                  <Typography variant="body1" gutterBottom>
+                    送信された請求書の検証を実行します。結果は次のステップで表示されます。
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    入力内容: {JSON.stringify(formValues, null, 2)}
+                  </Typography>
+                </Box>
+              )}
+
+              {activeStep > 1 && (
+                <Box>
+                  <Typography variant="h6" gutterBottom>
+                    検証結果
+                  </Typography>
+                  {loading && <Typography>検証中...</Typography>}
+                  {verificationResult && (
+                    <pre style={resultPreStyle}>
+                      {JSON.stringify(verificationResult, null, 2)}
+                    </pre>
+                  )}
+                  {!verificationResult && !loading && (
+                    <Typography color="text.secondary">
+                      検証ログはここに表示されます。
+                    </Typography>
+                  )}
+                </Box>
+              )}
+            </Box>
+
+            <Box sx={footerSx}>
+              <Button disabled={activeStep === 0} onClick={handleBack}>
+                戻る
+              </Button>
+              {isLastStep ? (
+                <Button variant="contained" color="primary">
+                  ダウンロード
+                </Button>
+              ) : (
+                <Button
+                  variant="contained"
+                  color="primary"
+                  onClick={handleNext}
+                  disabled={!canContinue}
+                >
+                  次へ
+                </Button>
+              )}
+            </Box>
+          </Paper>
+        </Container>
+      </Box>
+    </>
+  );
+}
+

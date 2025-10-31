@@ -1,0 +1,29 @@
+from datetime import date
+from typing import List, Optional
+
+from pydantic import BaseModel, Field
+
+
+class InvoicePayload(BaseModel):
+    invoice_number: str = Field(..., alias="invoiceNumber")
+    vendor_name: str = Field(..., alias="vendorName")
+    amount: float
+    currency: str
+    issue_date: date = Field(..., alias="issueDate")
+
+
+class ValidationIssue(BaseModel):
+    rule_id: str
+    message: str
+    severity: str
+
+
+class ValidationResult(BaseModel):
+    invoice_number: str
+    is_valid: bool
+    issues: List[ValidationIssue] = Field(default_factory=list)
+    next_steps: Optional[str] = None
+
+    class Config:
+        allow_population_by_field_name = True
+

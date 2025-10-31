@@ -1,0 +1,19 @@
+provider: mock
+
+defaults:
+  model: gpt-4.1-mini
+  temperature: 0.0
+
+mocks:
+  invoice_spec_agent:
+    name: invoice-spec-agent
+    version: 1
+    response_path: ./mock/specs/invoice-verification.json
+
+providers:
+  mock:
+    enabled: true
+  openai:
+    enabled: false
+    api_key: ""
+

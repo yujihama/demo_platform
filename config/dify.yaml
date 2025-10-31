@@ -1,0 +1,11 @@
+mode: mock
+enabled: true
+
+mock:
+  base_url: http://localhost:8000/mock/dify
+  workflow_id: invoice-verification-mock
+
+production:
+  base_url: https://dify.example.com
+  api_key: ""
+

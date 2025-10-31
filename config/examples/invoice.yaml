@@ -1,0 +1,17 @@
+user:
+  id: demo-user
+  email: demo@example.com
+
+project:
+  id: invoice-verification-mvp
+  name: "Invoice Verification Assistant"
+  description: "Generates a mock invoice verification web app for finance teams."
+
+mock:
+  spec_id: invoice-verification
+
+options:
+  include_playwright: true
+  include_docker: true
+  include_logging: true
+

@@ -1,0 +1,20 @@
+phase: mvp
+
+agents:
+  use_mock: true
+  mock_spec_path: ./mock/specs/invoice-verification.json
+
+generation:
+  output_root: ./output
+  template_root: ./templates
+  package_name_template: "invoice-verification"
+  enable_playwright: true
+
+frontend:
+  base_url: http://localhost:5173
+  polling_interval_seconds: 2
+
+backend:
+  base_url: http://localhost:8000
+  log_level: INFO
+
