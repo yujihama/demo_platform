@@ -19,6 +19,8 @@ export interface GenerationRequest {
     include_docker: boolean;
     include_logging: boolean;
   };
+  requirements_prompt?: string | null;
+  use_mock?: boolean | null;
 }
 
 export interface GenerationResponse {
@@ -45,5 +47,12 @@ export interface GenerationStatus {
 export interface ErrorResponse {
   detail?: string;
   message?: string;
+}
+
+export interface FeaturesConfig {
+  agents: {
+    use_mock: boolean;
+    allow_llm_toggle: boolean;
+  };
 }
 

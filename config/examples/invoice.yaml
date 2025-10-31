@@ -7,6 +7,10 @@ project:
   name: "Invoice Verification Assistant"
   description: "Generates a mock invoice verification web app for finance teams."
 
+llm:
+  use_mock: true
+  requirements_prompt: "Generate an invoice validation assistant that processes uploaded invoices and highlights anomalies."
+
 mock:
   spec_id: invoice-verification
 

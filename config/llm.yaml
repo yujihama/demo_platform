@@ -16,4 +16,15 @@ providers:
   openai:
     enabled: false
     api_key: ""
+    organization: ""
+    base_url: ""
+    model: gpt-4.1-mini
+    temperature: 0.0
+  azure_openai:
+    enabled: false
+    api_key: ""
+    endpoint: ""
+    deployment: ""
+    api_version: "2024-05-01-preview"
+    temperature: 0.0
 

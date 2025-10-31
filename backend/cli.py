@@ -11,6 +11,7 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
+from .app.config import config_manager
 from .app.models import GenerationRequest, GenerationOptions
 from .app.services.pipeline import pipeline
 
@@ -38,6 +39,18 @@ def _build_request(data: Dict[str, object]) -> GenerationRequest:
 
     mock = data.get("mock", {})
     options = data.get("options", {})
+    llm_config = data.get("llm", {})
+
+    features = config_manager.features
+    requirements_prompt = str(llm_config.get("requirements_prompt") or description)
+
+    raw_use_mock = llm_config.get("use_mock")
+    if raw_use_mock is None:
+        use_mock = features.agents.use_mock
+    elif isinstance(raw_use_mock, str):
+        use_mock = raw_use_mock.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        use_mock = bool(raw_use_mock)
 
     return GenerationRequest(
         user_id=user_id,
@@ -50,6 +63,8 @@ def _build_request(data: Dict[str, object]) -> GenerationRequest:
             include_docker=bool(options.get("include_docker", True)),
             include_logging=bool(options.get("include_logging", True)),
         ),
+        requirements_prompt=requirements_prompt,
+        use_mock=use_mock,
     )
 
 
@@ -81,13 +96,16 @@ def cli() -> None:
     help="Generation configuration file",
 )
 def generate(config_path: Path) -> None:
-    """Run the Phase 1 mock generation pipeline from the CLI."""
+    """Run the generation pipeline (mock or LLM) from the CLI."""
 
     console.rule("CLI Generation")
     console.log(f"設定ファイルを読み込み中: {config_path}")
 
     config_data = _load_config(config_path)
     request = _build_request(config_data)
+    effective_use_mock = request.use_mock if request.use_mock is not None else config_manager.features.agents.use_mock
+    mode_label = "モックパイプライン" if effective_use_mock else "LLMパイプライン"
+    console.log(f"実行モード: {mode_label}")
 
     progress = ProgressPrinter()
 

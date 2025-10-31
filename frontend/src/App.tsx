@@ -7,24 +7,19 @@ import { StepPreview } from "./components/StepPreview";
 import { StepLogs } from "./components/StepLogs";
 import { StepDownload } from "./components/StepDownload";
 import { ErrorBanner } from "./components/ErrorBanner";
-import { createGenerationJob } from "./api";
-import type { GenerationRequest, GenerationStatus, JobStep } from "./types";
+import { createGenerationJob, fetchFeaturesConfig } from "./api";
+import type { FeaturesConfig, GenerationRequest, GenerationStatus, JobStep } from "./types";
 import { useJobPolling } from "./hooks/useJobPolling";
 import { usePreview } from "./hooks/usePreview";
 import { logger } from "./utils/logger";
 
-const stepLabels = [
-  "要件入力",
-  "進捗ダッシュボード",
-  "モックプレビュー",
-  "テンプレート生成",
-  "バックエンド設定",
-  "テスト・パッケージ",
-  "成果物ダウンロード"
-];
-
 const STEP_NAME_MAP: Record<string, string> = {
   requirements: "要件受付",
+  requirements_decomposition: "要件分解",
+  app_type_classification: "アプリタイプ分類",
+  component_selection: "コンポーネント選定",
+  data_flow_design: "データフロー設計",
+  validation: "仕様バリデーション",
   mock_agent: "モック仕様",
   preview: "プレビュー",
   template_generation: "テンプレート生成",
@@ -34,12 +29,41 @@ const STEP_NAME_MAP: Record<string, string> = {
 };
 
 export default function App() {
+  const [features, setFeatures] = useState<FeaturesConfig | null>(null);
   const [activeStep, setActiveStep] = useState(0);
   const [jobId, setJobId] = useState<string | null>(null);
   const [specId, setSpecId] = useState<string | null>(null);
   const [submitLoading, setSubmitLoading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [previewApproved, setPreviewApproved] = useState(false);
+  const [lastUseMock, setLastUseMock] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    fetchFeaturesConfig()
+      .then((config) => {
+        if (!active) return;
+        setFeatures(config);
+        setLastUseMock(config.agents.use_mock);
+      })
+      .catch((error) => logger.warn("Failed to load feature config", error));
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const stepLabels = useMemo(
+    () => [
+      "要件入力",
+      "進捗ダッシュボード",
+      lastUseMock ? "モックプレビュー" : "エージェント設計",
+      "テンプレート生成",
+      "バックエンド設定",
+      "テスト・パッケージ",
+      "成果物ダウンロード"
+    ],
+    [lastUseMock]
+  );
 
   const { status, loading: pollingLoading, error: pollingError, refresh, stop } = useJobPolling(jobId);
   const { html, loading: previewLoading, error: previewError } = usePreview(specId);
@@ -49,10 +73,12 @@ export default function App() {
     setSubmitError(null);
     try {
       const response = await createGenerationJob(payload);
+      const effectiveUseMock = payload.use_mock ?? features?.agents.use_mock ?? true;
       setJobId(response.job_id);
-      setSpecId(payload.mock_spec_id);
+      setLastUseMock(effectiveUseMock);
+      setSpecId(effectiveUseMock ? payload.mock_spec_id : null);
       setActiveStep(1);
-      setPreviewApproved(false);
+      setPreviewApproved(!effectiveUseMock);
       logger.info("Generation job created", response.job_id);
     } catch (error) {
       setSubmitError("ジョブの作成に失敗しました。バックエンドが起動しているか確認してください。");
@@ -80,8 +106,11 @@ export default function App() {
     stop();
     setJobId(null);
     setSpecId(null);
-    setPreviewApproved(false);
+    const defaultUseMock = features?.agents.use_mock ?? true;
+    setLastUseMock(defaultUseMock);
+    setPreviewApproved(!defaultUseMock);
     setActiveStep(0);
+    setSubmitError(null);
     logger.info("Wizard restarted");
   };
 
@@ -94,6 +123,12 @@ export default function App() {
     }
     return null;
   }, [submitError, pollingError, status]);
+
+  const errorDetails = useMemo(() => {
+    if (status?.status !== "failed") return null;
+    const failingStep = status.steps.find((step) => step.status === "failed");
+    return failingStep?.logs ?? null;
+  }, [status]);
 
   const templateSteps = filterSteps(status, ["template_generation"]);
   const backendSteps = filterSteps(status, ["backend_setup"]);
@@ -155,11 +190,11 @@ export default function App() {
             </Tabs>
           </Paper>
 
-          {errorMessage && <ErrorBanner message={errorMessage} onRetry={refresh} />}
+          {errorMessage && <ErrorBanner message={errorMessage} details={errorDetails ?? undefined} onRetry={refresh} />}
 
           {activeStep === 0 && (
             <Paper variant="outlined" sx={{ p: 4 }}>
-              <StepRequirements onSubmit={handleSubmit} loading={submitLoading} error={submitError} />
+              <StepRequirements onSubmit={handleSubmit} loading={submitLoading} error={submitError} features={features} />
             </Paper>
           )}
 
@@ -167,14 +202,27 @@ export default function App() {
             <StepProgress status={status ?? null} loading={pollingLoading} />
           )}
 
-          {activeStep === 2 && canShowPreview && (
-            <StepPreview
-              html={html}
-              loading={previewLoading}
-              error={previewError}
-              onApprove={handleApprovePreview}
-              onReject={handleRejectPreview}
-            />
+          {activeStep === 2 && (
+            lastUseMock ? (
+              canShowPreview && (
+                <StepPreview
+                  html={html}
+                  loading={previewLoading}
+                  error={previewError}
+                  onApprove={handleApprovePreview}
+                  onReject={handleRejectPreview}
+                />
+              )
+            ) : (
+              <Paper variant="outlined" sx={{ p: 4 }}>
+                <Typography variant="h6" gutterBottom>
+                  エージェント設計プレビュー
+                </Typography>
+                <Typography color="text.secondary">
+                  LLMモードではプレビューはありません。進捗ダッシュボードで各エージェントのステータスを確認してください。
+                </Typography>
+              </Paper>
+            )
           )}
 
           {activeStep === 3 && (

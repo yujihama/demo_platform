@@ -38,6 +38,14 @@ class GenerationRequest(BaseModel):
     description: str = Field(..., description="High level description of the app to generate")
     mock_spec_id: str = Field("invoice-verification", description="Mock specification ID")
     options: GenerationOptions = Field(default_factory=GenerationOptions)
+    requirements_prompt: str | None = Field(
+        default=None,
+        description="Natural language requirements used by the LLM pipeline",
+    )
+    use_mock: bool | None = Field(
+        default=None,
+        description="Override flag to force mock or LLM pipeline per request",
+    )
 
 
 class JobStep(BaseModel):

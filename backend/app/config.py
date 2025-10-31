@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, validator, model_validator
 
 
 class FrontendSettings(BaseModel):
@@ -22,6 +22,10 @@ class BackendSettings(BaseModel):
 
 class AgentSettings(BaseModel):
     use_mock: bool = Field(True, description="Whether to enable the mock agent pipeline")
+    allow_llm_toggle: bool = Field(
+        False,
+        description="Whether the UI should expose a toggle to switch between mock and LLM modes",
+    )
     mock_spec_path: Path = Field(..., description="Path to the mock specification JSON")
 
     @validator("mock_spec_path", pre=True)
@@ -48,11 +52,6 @@ class FeatureConfig(BaseModel):
     backend: BackendSettings
 
 
-class LLMProviderConfig(BaseModel):
-    enabled: bool = False
-    api_key: Optional[str] = None
-
-
 class LLMDefaults(BaseModel):
     model: str
     temperature: float = 0.0
@@ -62,7 +61,65 @@ class LLMConfig(BaseModel):
     provider: str
     defaults: LLMDefaults
     mocks: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
-    providers: Dict[str, LLMProviderConfig] = Field(default_factory=dict)
+    providers: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_active_provider(self) -> "LLMConfig":
+        provider = self.provider
+        if provider == "openai":
+            config = self.providers.get("openai", {})
+            OpenAIProviderConfig(**config)
+        elif provider == "azure_openai":
+            config = self.providers.get("azure_openai", {})
+            AzureOpenAIProviderConfig(**config)
+        return self
+
+    def get_openai_config(self) -> "OpenAIProviderConfig":
+        return OpenAIProviderConfig(**self.providers.get("openai", {}))
+
+    def get_azure_openai_config(self) -> "AzureOpenAIProviderConfig":
+        return AzureOpenAIProviderConfig(**self.providers.get("azure_openai", {}))
+
+
+class BaseProviderConfig(BaseModel):
+    enabled: bool = False
+
+
+class OpenAIProviderConfig(BaseProviderConfig):
+    api_key: Optional[str] = None
+    organization: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    temperature: Optional[float] = None
+
+    @model_validator(mode="after")
+    def _check_required(cls, values: "OpenAIProviderConfig") -> "OpenAIProviderConfig":
+        if values.enabled and not values.api_key:
+            raise ValueError("OpenAI provider requires api_key when enabled")
+        return values
+
+
+class AzureOpenAIProviderConfig(BaseProviderConfig):
+    api_key: Optional[str] = None
+    endpoint: Optional[str] = None
+    deployment: Optional[str] = None
+    api_version: Optional[str] = Field(default="2024-05-01-preview")
+    model: Optional[str] = None
+    temperature: Optional[float] = None
+
+    @model_validator(mode="after")
+    def _check_required(cls, values: "AzureOpenAIProviderConfig") -> "AzureOpenAIProviderConfig":
+        if not values.enabled:
+            return values
+        missing = [
+            name
+            for name in ("api_key", "endpoint", "deployment", "api_version")
+            if not getattr(values, name)
+        ]
+        if missing:
+            missing_str = ", ".join(missing)
+            raise ValueError(f"Azure OpenAI provider missing required settings: {missing_str}")
+        return values
 
 
 class DifyEnvironmentConfig(BaseModel):

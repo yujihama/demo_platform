@@ -9,4 +9,7 @@ rich==13.7.1
 orjson==3.10.6
 aiofiles==24.1.0
 loguru==0.7.2
+langchain-core==0.2.6
+langchain-openai==0.1.8
+openai==1.43.0
 
