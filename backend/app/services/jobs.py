@@ -6,6 +6,7 @@ from datetime import datetime
 from threading import Lock
 from typing import Any, Dict, Iterable, Optional
 
+from ..config import ConfigManager, config_manager
 from ..models.generation import (
     GenerationJob,
     GenerationRequest,
@@ -14,30 +15,55 @@ from ..models.generation import (
     StepStatus,
 )
 
-
-DEFAULT_STEP_DEFINITIONS = [
+MOCK_STEP_DEFINITIONS = [
     ("requirements", "要件受付"),
     ("mock_agent", "モック仕様生成"),
     ("preview", "モックプレビュー"),
     ("template_generation", "テンプレート生成"),
     ("backend_setup", "バックエンド構築"),
     ("testing", "テスト準備"),
-    ("packaging", "成果物パッケージ")
+    ("packaging", "成果物パッケージ"),
+]
+
+LLM_STEP_DEFINITIONS = [
+    ("requirements", "要件受付"),
+    ("agent1_requirements", "要件分解"),
+    ("agent2_classification", "アプリタイプ分類"),
+    ("agent3_selection", "コンポーネント選定"),
+    ("agent3_selection_retry_1", "コンポーネント再選定 (1回目)"),
+    ("agent3_selection_retry_2", "コンポーネント再選定 (2回目)"),
+    ("agent4_dataflow", "データフロー設計"),
+    ("validator", "仕様検証"),
+    ("preview", "モックプレビュー"),
+    ("template_generation", "テンプレート生成"),
+    ("backend_setup", "バックエンド構築"),
+    ("testing", "テスト準備"),
+    ("packaging", "成果物パッケージ"),
 ]
 
 
 class JobRegistry:
     """Thread-safe in-memory store that tracks generation jobs."""
 
-    def __init__(self) -> None:
+    def __init__(self, config_manager: ConfigManager = config_manager) -> None:
         self._jobs: Dict[str, GenerationJob] = {}
         self._lock = Lock()
+        self._config_manager = config_manager
+
+    def _resolve_step_definitions(self) -> Iterable[tuple[str, str]]:
+        """Return step definitions based on whether the mock pipeline is enabled."""
+
+        try:
+            use_mock = self._config_manager.features.agents.use_mock
+        except Exception:  # pragma: no cover - defensive fallback
+            use_mock = True
+        return MOCK_STEP_DEFINITIONS if use_mock else LLM_STEP_DEFINITIONS
 
     # ------------------------------------------------------------------
     def create_job(self, job_id: str, request: GenerationRequest) -> GenerationJob:
         steps = [
             JobStep(id=step_id, label=label, status=StepStatus.PENDING)
-            for step_id, label in DEFAULT_STEP_DEFINITIONS
+            for step_id, label in self._resolve_step_definitions()
         ]
         if steps:
             steps[0].status = StepStatus.RUNNING

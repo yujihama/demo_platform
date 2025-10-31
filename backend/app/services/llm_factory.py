@@ -10,7 +10,12 @@ from typing import Any, Dict, Optional
 from langchain_openai import ChatOpenAI
 from openai import OpenAIError
 
-from ..config import ConfigManager, config_manager
+from ..config import (
+    AzureOpenAIProviderConfig,
+    ConfigManager,
+    LLMProviderConfig,
+    config_manager,
+)
 from .mock_agent import MockAgent
 
 logger = logging.getLogger(__name__)
@@ -43,11 +48,23 @@ class LLMFactory:
             raise ValueError("Cannot create LLM instance when provider is 'mock'. Use create_mock_agent instead.")
 
         provider_config = llm_cfg.providers.get(provider)
-        if not provider_config or not provider_config.get("enabled"):
+        if not provider_config:
+            raise ValueError(f"Provider '{provider}' is not enabled or not configured")
+
+        if isinstance(provider_config, dict):
+            # Backwards compatibility in case raw dicts slip through
+            enabled = provider_config.get("enabled")
+        else:
+            enabled = getattr(provider_config, "enabled", None)
+
+        if not enabled:
             raise ValueError(f"Provider '{provider}' is not enabled or not configured")
 
         if provider == "openai":
-            api_key = provider_config.get("api_key")
+            if isinstance(provider_config, LLMProviderConfig):
+                api_key = provider_config.api_key
+            else:
+                api_key = getattr(provider_config, "api_key", None)
             if not api_key:
                 raise ValueError("OpenAI API key is required")
             self._llm_instance = ChatOpenAI(
@@ -56,10 +73,16 @@ class LLMFactory:
                 api_key=api_key,
             )
         elif provider == "azure_openai":
-            api_key = provider_config.get("api_key")
-            endpoint = provider_config.get("endpoint")
-            deployment_name = provider_config.get("deployment_name")
-            api_version = provider_config.get("api_version", "2024-02-15-preview")
+            if isinstance(provider_config, AzureOpenAIProviderConfig):
+                api_key = provider_config.api_key
+                endpoint = provider_config.endpoint
+                deployment_name = provider_config.deployment_name
+                api_version = provider_config.api_version
+            else:
+                api_key = getattr(provider_config, "api_key", None)
+                endpoint = getattr(provider_config, "endpoint", None)
+                deployment_name = getattr(provider_config, "deployment_name", None)
+                api_version = getattr(provider_config, "api_version", "2024-02-15-preview")
 
             if not api_key or not endpoint or not deployment_name:
                 raise ValueError("Azure OpenAI requires api_key, endpoint, and deployment_name")
