@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -490,6 +491,44 @@ class GenerationPipeline:
         data_flow: DataFlowDesignResult,
         validation: ValidationResult,
     ) -> Dict[str, Any]:
+        frontend_fields = self._build_frontend_fields(components, requirements)
+        frontend_spec = {
+            "wizard": {
+                "steps": [label for _, label in LLM_STEP_DEFINITIONS],
+                "primary_color": "#1976d2",
+                "accent_color": "#009688",
+            },
+            "forms": [
+                {
+                    "step": 1,
+                    "title": requirements.primary_goal or "ユーザー入力",
+                    "fields": frontend_fields,
+                }
+            ],
+        }
+
+        backend_spec = {
+            "validation_rules": self._build_backend_rules(requirements, validation),
+        }
+
+        tests_spec = {
+            "playwright": {
+                "scenarios": [
+                    {
+                        "name": "wizard-happy-path",
+                        "description": "Completes the wizard and downloads the generated zip",
+                    }
+                ]
+            }
+        }
+
+        docker_spec = {
+            "services": [
+                {"name": "web", "description": "React frontend"},
+                {"name": "api", "description": "FastAPI backend"},
+            ]
+        }
+
         return {
             "app": {
                 "name": request.project_name,
@@ -508,7 +547,139 @@ class GenerationPipeline:
             "components": components.model_dump(),
             "data_flow": data_flow.model_dump(),
             "validation": validation.model_dump(),
+            "frontend": frontend_spec,
+            "backend": backend_spec,
+            "tests": tests_spec,
+            "docker": docker_spec,
         }
+
+    def _build_frontend_fields(
+        self,
+        components: ComponentSelectionResult,
+        requirements: RequirementsDecompositionResult,
+    ) -> List[Dict[str, Any]]:
+        fields: List[Dict[str, Any]] = []
+        for placement in components.components:
+            try:
+                definition = self._catalog.get(placement.component_id)
+            except KeyError:
+                logger.warning("Unknown component '%s' returned by LLM", placement.component_id)
+                continue
+
+            if definition.category not in {"form", "input"}:
+                continue
+
+            binding = placement.props.get("binding") or placement.props.get("name")
+            label = placement.props.get("label") or definition.name
+            field_name = binding or self._slugify(label or placement.component_id, default="field")
+            label = label or field_name
+            field_type = self._infer_field_type(placement.component_id)
+            required = self._coerce_bool(placement.props.get("required"))
+
+            field: Dict[str, Any] = {
+                "name": field_name,
+                "label": label,
+                "type": field_type,
+                "required": required,
+            }
+
+            if placement.component_id == "file_upload":
+                accept = placement.props.get("accept")
+                if isinstance(accept, list):
+                    field["options"] = accept
+
+            fields.append(field)
+
+        if fields:
+            return fields
+
+        fallback_fields: List[Dict[str, Any]] = []
+        for item in requirements.requirements:
+            category = (item.category or "").upper()
+            if category != "INPUT":
+                continue
+            fallback_fields.append(
+                {
+                    "name": self._slugify(item.id or item.title, default="input"),
+                    "label": item.title,
+                    "type": "text",
+                    "required": True,
+                }
+            )
+
+        if not fallback_fields:
+            fallback_fields.append(
+                {
+                    "name": "userInput",
+                    "label": "ユーザー入力",
+                    "type": "text",
+                    "required": False,
+                }
+            )
+
+        return fallback_fields
+
+    def _build_backend_rules(
+        self,
+        requirements: RequirementsDecompositionResult,
+        validation: ValidationResult,
+    ) -> List[Dict[str, Any]]:
+        rules: List[Dict[str, Any]] = []
+        for item in requirements.requirements:
+            rule_id = self._slugify(item.id or item.title, default="rule")
+            category = (item.category or "").upper()
+            rules.append(
+                {
+                    "id": rule_id,
+                    "description": item.description or item.title,
+                    "severity": "warning" if category != "OUTPUT" else "info",
+                }
+            )
+
+        for issue in validation.errors:
+            rules.append(
+                {
+                    "id": issue.code,
+                    "description": issue.message,
+                    "severity": issue.level.lower(),
+                }
+            )
+
+        if not rules:
+            rules.append(
+                {
+                    "id": "llm-generated-check",
+                    "description": "LLM generated specification placeholder validation rule",
+                    "severity": "info",
+                }
+            )
+
+        return rules
+
+    @staticmethod
+    def _infer_field_type(component_id: str) -> str:
+        mapping = {
+            "text_input": "text",
+            "textarea": "textarea",
+            "file_upload": "file",
+        }
+        return mapping.get(component_id, "text")
+
+    @staticmethod
+    def _coerce_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"true", "1", "yes", "y"}
+        if isinstance(value, (int, float)):
+            return bool(value)
+        return False
+
+    @staticmethod
+    def _slugify(value: str, default: str = "item") -> str:
+        cleaned = re.sub(r"[^0-9a-zA-Z]+", "-", value or "")
+        cleaned = cleaned.strip("-").lower()
+        return cleaned or default
 
     def _format_validation_feedback(self, validation: ValidationResult) -> str:
         if not validation.errors:
