@@ -1,5 +1,5 @@
 import axios from "axios";
-import type { GenerationRequest, GenerationResponse, GenerationStatus } from "./types";
+import type { FeaturesConfig, GenerationRequest, GenerationResponse, GenerationStatus } from "./types";
 
 const client = axios.create({
   baseURL: import.meta.env.VITE_BACKEND_URL ?? "/api"
@@ -20,5 +20,10 @@ export async function fetchPreview(specId: string) {
     responseType: 'text'
   });
   return data as string;
+}
+
+export async function fetchFeaturesConfig() {
+  const { data } = await client.get<FeaturesConfig>('/config/features');
+  return data;
 }
 

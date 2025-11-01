@@ -36,7 +36,7 @@ function computeActiveStep(status: GenerationStatus) {
 function translateStatus(status: string) {
   switch (status) {
     case "spec_generating":
-      return "モック仕様生成中";
+      return "仕様生成中";
     case "templates_rendering":
       return "テンプレートレンダリング中";
     case "packaging":

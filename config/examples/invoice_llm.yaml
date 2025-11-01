@@ -1,0 +1,19 @@
+user:
+  id: cli-llm-user
+
+project:
+  id: invoice-validation-llm
+  name: "Invoice Validation LLM"
+  description: "Generates an invoice validation assistant using the LLM pipeline."
+
+llm:
+  use_mock: false
+  requirements_prompt: "force retry Build an invoice document processor that extracts fields and highlights anomalies."
+
+mock:
+  spec_id: invoice-verification
+
+options:
+  include_playwright: true
+  include_docker: false
+  include_logging: true

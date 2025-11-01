@@ -22,7 +22,7 @@ DEFAULT_STEP_DEFINITIONS = [
     ("template_generation", "テンプレート生成"),
     ("backend_setup", "バックエンド構築"),
     ("testing", "テスト準備"),
-    ("packaging", "成果物パッケージ")
+    ("packaging", "成果物パッケージ"),
 ]
 
 
@@ -34,10 +34,16 @@ class JobRegistry:
         self._lock = Lock()
 
     # ------------------------------------------------------------------
-    def create_job(self, job_id: str, request: GenerationRequest) -> GenerationJob:
+    def create_job(
+        self,
+        job_id: str,
+        request: GenerationRequest,
+        step_definitions: Iterable[tuple[str, str]] | None = None,
+    ) -> GenerationJob:
+        definitions = list(step_definitions or DEFAULT_STEP_DEFINITIONS)
         steps = [
             JobStep(id=step_id, label=label, status=StepStatus.PENDING)
-            for step_id, label in DEFAULT_STEP_DEFINITIONS
+            for step_id, label in definitions
         ]
         if steps:
             steps[0].status = StepStatus.RUNNING

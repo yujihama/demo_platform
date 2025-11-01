@@ -2,6 +2,7 @@ phase: mvp
 
 agents:
   use_mock: true
+  allow_llm_toggle: true
   mock_spec_path: ./mock/specs/invoice-verification.json
 
 generation:

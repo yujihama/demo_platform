@@ -1,0 +1,19 @@
+user:
+  id: cli-llm-validation
+
+project:
+  id: invoice-validation-llm-job
+  name: "Invoice Validation LLM"
+  description: "Generates an invoice validation assistant using the LLM pipeline."
+
+llm:
+  use_mock: false
+  requirements_prompt: "Build an invoice validation assistant that checks for duplicates and threshold breaches."
+
+mock:
+  spec_id: invoice-verification
+
+options:
+  include_playwright: true
+  include_docker: false
+  include_logging: true
