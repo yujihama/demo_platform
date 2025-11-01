@@ -22,11 +22,6 @@ class WorkflowProvider(BaseModel):
     api_key_env: Optional[str] = Field(default=None, description="Environment variable name for API key")
 
 
-class WorkflowsSection(BaseModel):
-    """Workflows section defining external API endpoints."""
-    workflows: Dict[str, WorkflowProvider] = Field(..., description="Named workflow providers")
-
-
 class UIComponent(BaseModel):
     """Base UI component definition."""
     type: str = Field(..., description="Component type (table, file_upload, button, etc.)")
@@ -65,6 +60,8 @@ class PipelineSection(BaseModel):
 class WorkflowYaml(BaseModel):
     """Complete workflow.yaml schema."""
     info: WorkflowInfo = Field(..., description="Application metadata")
-    workflows: WorkflowsSection = Field(..., description="Workflow providers configuration")
+    workflows: Dict[str, WorkflowProvider] = Field(
+        ..., description="Workflow providers configuration"
+    )
     ui: Optional[UISection] = Field(default=None, description="UI definition")
     pipeline: PipelineSection = Field(..., description="Backend processing pipeline")
