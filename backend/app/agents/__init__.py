@@ -1,34 +1,29 @@
-"""LLM agent package exposing structured agent classes."""
+"""Declarative workflow agent orchestration exports."""
 
-from .base import StructuredLLMAgent
 from .models import (
-    AppTypeClassificationResult,
-    ComponentPlacement,
-    ComponentSelectionResult,
-    DataFlowDesignResult,
-    RequirementsDecompositionResult,
-    ValidationResult,
+    AnalystInsight,
+    ArchitectBlueprint,
+    PipelineStepPlan,
+    UIComponentPlan,
+    UIStepPlan,
+    ValidationIssue,
+    ValidatorReport,
+    WorkflowAdapterConfig,
 )
-from .llm_agents import (
-    RequirementsDecompositionAgent,
-    AppTypeClassificationAgent,
-    ComponentSelectionAgent,
-    DataFlowDesignAgent,
-    SpecificationValidatorAgent,
-)
+from .workflow import AnalystAgent, ArchitectAgent, SpecialistAgent, ValidatorAgent
 
 __all__ = [
-    "StructuredLLMAgent",
-    "RequirementsDecompositionAgent",
-    "AppTypeClassificationAgent",
-    "ComponentSelectionAgent",
-    "DataFlowDesignAgent",
-    "SpecificationValidatorAgent",
-    "RequirementsDecompositionResult",
-    "AppTypeClassificationResult",
-    "ComponentSelectionResult",
-    "DataFlowDesignResult",
-    "ValidationResult",
-    "ComponentPlacement",
+    "AnalystAgent",
+    "ArchitectAgent",
+    "SpecialistAgent",
+    "ValidatorAgent",
+    "AnalystInsight",
+    "ArchitectBlueprint",
+    "WorkflowAdapterConfig",
+    "PipelineStepPlan",
+    "UIComponentPlan",
+    "UIStepPlan",
+    "ValidatorReport",
+    "ValidationIssue",
 ]
 

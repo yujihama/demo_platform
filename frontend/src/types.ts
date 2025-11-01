@@ -1,58 +1,97 @@
-export type JobStatus =
-  | "received"
-  | "spec_generating"
-  | "templates_rendering"
-  | "packaging"
-  | "completed"
-  | "failed";
+export interface WorkflowGenerationRequest {
+  prompt: string;
+  app_name?: string;
+  session_id?: string;
+  force_mock?: boolean;
+}
 
-export type StepStatus = "pending" | "running" | "completed" | "failed";
+export type AgentRole = "analyst" | "architect" | "specialist" | "validator";
 
-export interface GenerationRequest {
-  user_id: string;
-  project_id: string;
-  project_name: string;
+export interface AgentMessage {
+  role: AgentRole;
+  title: string;
+  content: string;
+  success: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export interface WorkflowInfo {
+  name: string;
   description: string;
-  mock_spec_id: string;
-  options: {
-    include_playwright: boolean;
-    include_docker: boolean;
-    include_logging: boolean;
-  };
-  requirements_prompt?: string | null;
-  use_mock?: boolean | null;
+  version: string;
 }
 
-export interface GenerationResponse {
-  job_id: string;
-  status: JobStatus;
-}
-
-export interface JobStep {
+export interface WorkflowEndpoint {
   id: string;
-  label: string;
-  status: StepStatus;
-  message?: string;
-  logs?: string[];
+  name: string;
+  provider: "dify" | "mock";
+  endpoint: string;
+  method: "GET" | "POST";
 }
 
-export interface GenerationStatus {
-  job_id: string;
-  status: JobStatus;
-  steps: JobStep[];
-  download_url?: string | null;
-  metadata?: Record<string, unknown> | null;
+export interface PipelineStepBase {
+  id: string;
+  type: string;
+  [key: string]: unknown;
 }
 
-export interface ErrorResponse {
-  detail?: string;
-  message?: string;
+export interface WorkflowSpecification {
+  info: WorkflowInfo;
+  workflows: WorkflowEndpoint[];
+  pipeline: {
+    entrypoint: string;
+    steps: Record<string, PipelineStepBase[]>;
+  };
+  ui?: {
+    steps: Array<{
+      id: string;
+      title: string;
+      description?: string | null;
+    }>;
+  };
+}
+
+export interface WorkflowGenerationResponse {
+  workflow: WorkflowSpecification;
+  workflow_yaml: string;
+  messages: AgentMessage[];
+  retries: number;
+  duration_ms: number;
+}
+
+export interface PackageCreateRequest {
+  workflow_yaml: string;
+  app_name: string;
+  include_mock_server: boolean;
+  environment_variables: Record<string, string>;
+}
+
+export interface PackageDescriptor {
+  package_id: string;
+  filename: string;
+  download_url: string;
+  created_at: string;
+  expires_at?: string | null;
+  size_bytes?: number | null;
+}
+
+export interface PackageCreateResponse {
+  package: PackageDescriptor;
 }
 
 export interface FeaturesConfig {
-  agents: {
-    use_mock: boolean;
-    allow_llm_toggle: boolean;
+  default_mock: boolean;
+  frontend: {
+    base_url: string;
   };
+  backend: {
+    base_url: string;
+  };
+}
+
+export interface ErrorResponse {
+  message?: string;
+  detail?: string;
+  issues?: unknown;
 }
 

@@ -1,0 +1,38 @@
+version: "3.9"
+
+services:
+  engine:
+    image: ghcr.io/openspec/generic-workflow-engine:latest
+    ports:
+      - "8001:8001"
+    env_file:
+      - ./.env
+    volumes:
+      - ./workflow.yaml:/app/config/workflow.yaml:ro
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  frontend:
+    image: ghcr.io/openspec/generic-workflow-frontend:latest
+    environment:
+      BACKEND_BASE_URL: http://engine:8001
+    ports:
+      - "5173:5173"
+    depends_on:
+      - engine
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.2-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  mock-dify:
+    image: ghcr.io/openspec/mock-dify:latest
+    ports:
+      - "8080:8080"
+    environment:
+      MOCK_PROFILE: invoice-validation
+    restart: unless-stopped
