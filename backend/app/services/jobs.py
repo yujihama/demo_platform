@@ -17,12 +17,11 @@ from ..models.generation import (
 
 DEFAULT_STEP_DEFINITIONS = [
     ("requirements", "要件受付"),
-    ("mock_agent", "モック仕様生成"),
-    ("preview", "モックプレビュー"),
-    ("template_generation", "テンプレート生成"),
-    ("backend_setup", "バックエンド構築"),
-    ("testing", "テスト準備"),
-    ("packaging", "成果物パッケージ"),
+    ("analysis", "要件分析"),
+    ("architecture", "アーキテクチャ設計"),
+    ("yaml_generation", "YAML生成"),
+    ("validation", "スキーマ検証"),
+    ("packaging", "パッケージング"),
 ]
 
 

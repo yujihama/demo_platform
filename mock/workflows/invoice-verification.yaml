@@ -1,0 +1,90 @@
+version: "1"
+
+info:
+  name: ???????????
+  summary: ?????????????Dify????????????????????
+  version: 1.0.0
+
+workflows:
+  - id: dify_invoice_validation
+    provider: dify
+    endpoint: ${DIFY_BASE_URL}/workflows/invoice-validation/execute
+    method: POST
+    inputs:
+      file_url: "{{ context.upload_step.outputs.file_url }}"
+    outputs:
+      validation_result: "{{ response.data.result }}"
+
+pipeline:
+  - id: call_validation
+    type: call_workflow
+    title: ????????
+    with:
+      provider_id: dify_invoice_validation
+      input:
+        file_url: "{{ context.upload_step.outputs.file_url }}"
+    on_success:
+      - summarise_result
+
+  - id: summarise_result
+    type: transform
+    title: ???????
+    with:
+      expression: |
+        {
+          "status": context.call_validation.outputs.validation_result.status,
+          "issues": context.call_validation.outputs.validation_result.issues
+        }
+    on_success:
+      - present_table
+
+  - id: present_table
+    type: set_state
+    title: ???UI???
+    with:
+      state_key: "validation_summary"
+      value: "{{ context.summarise_result.outputs }}"
+
+ui:
+  layout: wizard
+  steps:
+    - id: upload_step
+      title: ?????????
+      description: ????????PDF??????????????
+      components:
+        - id: invoice_upload
+          type: file_upload
+          label: ???????
+          props:
+            accept:
+              - application/pdf
+            help_text: PDF????????1???????
+        - id: submit_button
+          type: button
+          label: ?????
+          props:
+            action: call_validation
+            variant: primary
+
+    - id: result_step
+      title: ????
+      description: Dify????????????????
+      components:
+        - id: result_summary
+          type: markdown
+          props:
+            content: |
+              **???????**: {{ context.validation_summary.status | default('???') }}
+        - id: issue_table
+          type: table
+          label: ????
+          props:
+            columns:
+              - label: ??????
+                field: field
+              - label: ?????
+                field: status
+              - label: ??
+                field: note
+          bindings:
+            rows: "{{ context.validation_summary.issues | default([]) }}"

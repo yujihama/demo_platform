@@ -1,7 +1,9 @@
 export type JobStatus =
   | "received"
-  | "spec_generating"
-  | "templates_rendering"
+  | "analysing"
+  | "architecting"
+  | "workflow_generating"
+  | "validating"
   | "packaging"
   | "completed"
   | "failed";
@@ -47,12 +49,5 @@ export interface GenerationStatus {
 export interface ErrorResponse {
   detail?: string;
   message?: string;
-}
-
-export interface FeaturesConfig {
-  agents: {
-    use_mock: boolean;
-    allow_llm_toggle: boolean;
-  };
 }
 

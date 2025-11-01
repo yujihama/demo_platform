@@ -1,0 +1,40 @@
+version: "3.9"
+
+services:
+  engine:
+    image: ${ENGINE_IMAGE:-ghcr.io/demo-platform/workflow-engine:latest}
+    container_name: workflow-engine
+    ports:
+      - "${ENGINE_API_PORT:-8000}:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./workflow.yaml:/app/workflow.yaml:ro
+      - engine-logs:/app/logs
+    depends_on:
+      - redis
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-ghcr.io/demo-platform/workflow-frontend:latest}
+    container_name: workflow-frontend
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      - VITE_API_BASE_URL=http://engine:8000
+    depends_on:
+      - engine
+
+  redis:
+    image: redis:7-alpine
+    container_name: workflow-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:
+  engine-logs:
