@@ -29,7 +29,7 @@ class WorkflowSerializer:
 
     @staticmethod
     def to_yaml(document: WorkflowDocument) -> str:
-        data = document.model_dump(mode="json")
+        data = document.model_dump(mode="json", by_alias=True)
         return yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
 
     @staticmethod
