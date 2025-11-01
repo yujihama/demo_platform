@@ -197,11 +197,16 @@ class WorkflowGenerationPipeline:
             if job_snapshot is None:
                 raise RuntimeError("Job snapshot missing during packaging")
             
+            validation_metadata = dict(validation_result)
+            validation_model = validation_metadata.get("model")
+            if validation_model is not None and hasattr(validation_model, "model_dump"):
+                validation_metadata["model"] = validation_model.model_dump()
+
             metadata = {
                 "workflow_yaml": yaml_content,
                 "analysis": analysis_result.model_dump(),
                 "architecture": architecture_result.model_dump(),
-                "validation": validation_result,
+                "validation": validation_metadata,
             }
             
             zip_path = self._packaging.package_workflow_app(
