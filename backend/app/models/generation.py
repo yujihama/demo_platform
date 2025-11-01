@@ -85,6 +85,70 @@ class PackageCreateResponse(BaseModel):
     package: PackageDescriptor
 
 
+class GenerationOptions(BaseModel):
+    """Feature flags controlling optional assets produced by the pipeline."""
+
+    include_playwright: bool = True
+    include_docker: bool = True
+    include_logging: bool = True
+
+
+class GenerationRequest(BaseModel):
+    """Request payload accepted by the legacy generation pipeline."""
+
+    user_id: str
+    project_id: str
+    project_name: str
+    description: str
+    mock_spec_id: str
+    options: GenerationOptions
+    requirements_prompt: Optional[str] = None
+    use_mock: Optional[bool] = None
+
+
+class StepStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class JobStatus(str, Enum):
+    RECEIVED = "received"
+    SPEC_GENERATING = "spec_generating"
+    TEMPLATES_RENDERING = "templates_rendering"
+    PACKAGING = "packaging"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class JobStep(BaseModel):
+    """Single unit of work within a generation job."""
+
+    id: str
+    label: str
+    status: StepStatus = StepStatus.PENDING
+    message: Optional[str] = None
+    logs: List[str] = Field(default_factory=list)
+
+
+class GenerationJob(BaseModel):
+    """In-flight job tracked by the pipeline and CLI."""
+
+    job_id: str
+    user_id: str
+    project_id: str
+    project_name: str
+    description: str
+    status: JobStatus = JobStatus.RECEIVED
+    steps: List[JobStep] = Field(default_factory=list)
+    download_url: Optional[str] = None
+    output_path: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 __all__ = [
     "AgentRole",
     "AgentMessage",
@@ -93,5 +157,11 @@ __all__ = [
     "PackageCreateRequest",
     "PackageCreateResponse",
     "PackageDescriptor",
+    "GenerationOptions",
+    "GenerationRequest",
+    "GenerationJob",
+    "JobStatus",
+    "JobStep",
+    "StepStatus",
 ]
 
