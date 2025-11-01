@@ -1,70 +1,66 @@
-"""Generation pipeline orchestrating mock agent, templates, and packaging."""
+"""Declarative workflow generation pipeline orchestrating LLM agents and packaging."""
 
 from __future__ import annotations
 
 import json
 import logging
-import re
 import shutil
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Sequence
 from uuid import uuid4
 
 from fastapi import BackgroundTasks
 
 from ..agents import (
-    AppTypeClassificationAgent,
-    ComponentSelectionAgent,
-    DataFlowDesignAgent,
-    RequirementsDecompositionAgent,
-    SpecificationValidatorAgent,
-)
-from ..agents.models import (
-    AppTypeClassificationResult,
-    ComponentSelectionResult,
-    DataFlowDesignResult,
-    RequirementsDecompositionResult,
-    ValidationResult,
+    AnalystAgent,
+    AnalystResult,
+    ArchitectAgent,
+    ArchitecturePlan,
+    WorkflowSpecialistAgent,
+    WorkflowValidatorAgent,
 )
 from ..config import ConfigManager, config_manager
 from ..models.generation import GenerationJob, GenerationRequest, JobStatus, StepStatus
-from ..services.ui_catalog import load_ui_catalog
+from ..workflow import WorkflowDocument, WorkflowSerializer, WorkflowValidationError, WorkflowValidator
 from .jobs import JobRegistry, job_registry
 from .llm_factory import RetryPolicy, llm_factory
 from .packaging import PackagingService
-from .templates import TemplateRenderer
 
 logger = logging.getLogger(__name__)
 
 
+WORKFLOW_STEP_DEFINITIONS: Sequence[tuple[str, str]] = (
+    ("requirements", "????"),
+    ("analysis", "????"),
+    ("architecture", "?????????"),
+    ("yaml_generation", "YAML??"),
+    ("validation", "??????"),
+    ("packaging", "???????"),
+)
+
 MOCK_STEP_DEFINITIONS: Sequence[tuple[str, str]] = (
-    ("requirements", "要件受付"),
-    ("mock_agent", "モック仕様生成"),
-    ("preview", "モックプレビュー"),
-    ("template_generation", "テンプレート生成"),
-    ("backend_setup", "バックエンド構築"),
-    ("testing", "テスト準備"),
-    ("packaging", "成果物パッケージ"),
+    ("requirements", "????"),
+    ("mock_workflow", "???workflow??"),
+    ("validation", "??????"),
+    ("packaging", "???????"),
 )
 
-LLM_STEP_DEFINITIONS: Sequence[tuple[str, str]] = (
-    ("requirements", "要件受付"),
-    ("requirements_decomposition", "要件分解"),
-    ("app_type_classification", "アプリタイプ分類"),
-    ("component_selection", "コンポーネント選定"),
-    ("data_flow_design", "データフロー設計"),
-    ("validation", "仕様バリデーション"),
-    ("template_generation", "テンプレート生成"),
-    ("backend_setup", "バックエンド構築"),
-    ("testing", "テスト準備"),
-    ("packaging", "成果物パッケージ"),
-)
+MAX_VALIDATION_ATTEMPTS = 3
 
-LLM_VALIDATION_MAX_ATTEMPTS = 3
+
+@dataclass
+class WorkflowArtifacts:
+    document: WorkflowDocument
+    yaml_text: str
+    metadata: Dict[str, Any]
+    notes: List[str]
 
 
 class GenerationPipeline:
+    """Coordinates LLM agents, validation, and packaging for workflow.yaml generation."""
+
     def __init__(
         self,
         config_manager: ConfigManager = config_manager,
@@ -73,15 +69,13 @@ class GenerationPipeline:
     ) -> None:
         self._config_manager = config_manager
         self._jobs = jobs
-
-        features = self._config_manager.features
-        template_root = Path(features.generation.template_root)
         self._llm_factory = llm_factory
-        self._template_renderer = TemplateRenderer(template_root)
+        features = self._config_manager.features
         self._packaging = PackagingService(Path(features.generation.output_root))
         self._working_root = working_root
         self._working_root.mkdir(parents=True, exist_ok=True)
-        self._catalog = load_ui_catalog()
+        self._workflow_validator = WorkflowValidator()
+        self._mock_workflow_root = Path("mock/workflows")
 
     # ------------------------------------------------------------------
     def enqueue(self, request: GenerationRequest, background_tasks: BackgroundTasks) -> GenerationJob:
@@ -106,12 +100,7 @@ class GenerationPipeline:
         logger.info("Running generation job %s synchronously", job_id)
         if progress_callback:
             self._notify(job_id, progress_callback)
-        self._run_job(
-            job_id,
-            request,
-            use_mock,
-            progress_callback=progress_callback,
-        )
+        self._run_job(job_id, request, use_mock, progress_callback=progress_callback)
         final_job = self._jobs.get(job_id)
         if final_job is None:
             raise RuntimeError("Job finished without persisted state")
@@ -126,13 +115,15 @@ class GenerationPipeline:
         progress_callback: Callable[[GenerationJob], None] | None = None,
     ) -> None:
         workspace = self._working_root / job_id
-        artifacts_dir = workspace / "artifacts"
-
         if workspace.exists():
             shutil.rmtree(workspace)
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        workspace.mkdir(parents=True, exist_ok=True)
 
-        spec: Dict[str, Any] | None = None
+        prompt = (request.requirements_prompt or request.description or "").strip()
+        if not prompt:
+            self._jobs.fail(job_id, "?????????????????")
+            self._notify(job_id, progress_callback)
+            return
 
         try:
             self._jobs.update_status(
@@ -140,85 +131,32 @@ class GenerationPipeline:
                 step_id="requirements",
                 job_status=JobStatus.RECEIVED,
                 step_status=StepStatus.COMPLETED,
-                message="要件を受理しました",
+                message="?????????",
             )
             self._notify(job_id, progress_callback)
 
             if use_mock:
-                spec = self._run_mock_pipeline(job_id, request, workspace, progress_callback)
+                artifacts = self._run_mock_pipeline(job_id, request, workspace, progress_callback)
             else:
-                spec = self._run_llm_pipeline(job_id, request, workspace, progress_callback)
-
-            self._write_json(workspace / "spec.json", spec)
-
-            context = self._build_template_context(request, spec)
-            self._jobs.update_status(
-                job_id,
-                step_id="template_generation",
-                job_status=JobStatus.TEMPLATES_RENDERING,
-                step_status=StepStatus.RUNNING,
-                message="テンプレートをレンダリングしています",
-            )
-            self._notify(job_id, progress_callback)
-            self._template_renderer.render_to_directory(artifacts_dir, context)
-            self._jobs.update_status(
-                job_id,
-                step_id="template_generation",
-                job_status=JobStatus.TEMPLATES_RENDERING,
-                step_status=StepStatus.COMPLETED,
-                message="テンプレートのレンダリングが完了しました",
-            )
-            self._notify(job_id, progress_callback)
-
-            self._jobs.update_status(
-                job_id,
-                step_id="backend_setup",
-                job_status=JobStatus.TEMPLATES_RENDERING,
-                step_status=StepStatus.RUNNING,
-                message="バックエンド設定を適用しています",
-            )
-            self._notify(job_id, progress_callback)
-            self._jobs.update_status(
-                job_id,
-                step_id="backend_setup",
-                job_status=JobStatus.TEMPLATES_RENDERING,
-                step_status=StepStatus.COMPLETED,
-                message="バックエンド設定が完了しました",
-            )
-            self._notify(job_id, progress_callback)
-
-            self._jobs.update_status(
-                job_id,
-                step_id="testing",
-                job_status=JobStatus.TEMPLATES_RENDERING,
-                step_status=StepStatus.RUNNING,
-                message="テストリソースを準備しています",
-            )
-            self._notify(job_id, progress_callback)
-            self._jobs.update_status(
-                job_id,
-                step_id="testing",
-                job_status=JobStatus.TEMPLATES_RENDERING,
-                step_status=StepStatus.COMPLETED,
-                message="テストテンプレートが準備できました",
-            )
-            self._notify(job_id, progress_callback)
+                artifacts = self._run_llm_pipeline(job_id, prompt, request, workspace, progress_callback)
 
             job_snapshot = self._jobs.get(job_id)
             if job_snapshot is None:
                 raise RuntimeError("Job snapshot missing during packaging")
 
-            metadata = self._build_metadata(request, spec)
+            metadata = dict(artifacts.metadata)
+            metadata["workflow_yaml"] = artifacts.yaml_text
 
             self._jobs.update_status(
                 job_id,
                 step_id="packaging",
                 job_status=JobStatus.PACKAGING,
                 step_status=StepStatus.RUNNING,
-                message="成果物をパッケージングしています",
+                message="?????????????",
             )
             self._notify(job_id, progress_callback)
-            zip_path = self._packaging.package(job_snapshot, artifacts_dir, metadata)
+
+            zip_path = self._packaging.package(job_snapshot, artifacts.yaml_text, metadata, artifacts.notes)
 
             download_url = f"/api/generate/{job_id}/download"
             self._jobs.complete(job_id, download_url, metadata, str(zip_path))
@@ -232,466 +170,238 @@ class GenerationPipeline:
             shutil.rmtree(workspace, ignore_errors=True)
 
     # ------------------------------------------------------------------
-    def _build_template_context(self, request: GenerationRequest, spec: Dict[str, Any]) -> Dict[str, Any]:
-        bundle = self._config_manager.load()
-        return {
-            "request": request.model_dump(),
-            "spec": spec,
-            "config": bundle.model_dump(),
-            "generated_at": datetime.utcnow().isoformat() + "Z",
-        }
-
-    def _build_metadata(self, request: GenerationRequest, spec: Dict[str, Any]) -> Dict[str, Any]:
-        metadata = {
-            "request": request.model_dump(),
-            "spec": spec,
-            "generated_at": datetime.utcnow().isoformat() + "Z",
-            "config": self._config_manager.export_metadata(),
-        }
-        return metadata
-
     def _run_mock_pipeline(
         self,
         job_id: str,
         request: GenerationRequest,
         workspace: Path,
         progress_callback: Callable[[GenerationJob], None] | None,
-    ) -> Dict[str, Any]:
+    ) -> WorkflowArtifacts:
         self._jobs.update_status(
             job_id,
-            step_id="mock_agent",
-            job_status=JobStatus.SPEC_GENERATING,
+            step_id="mock_workflow",
+            job_status=JobStatus.ANALYSING,
             step_status=StepStatus.RUNNING,
-            message="モック仕様を生成しています",
+            message="???workflow?????????",
         )
         self._notify(job_id, progress_callback)
 
-        agent = self._llm_factory.create_mock_agent(request.mock_spec_id)
-        spec = agent.generate_spec(request.mock_spec_id)
+        mock_path = self._mock_workflow_root / f"{request.mock_spec_id}.yaml"
+        if not mock_path.exists():
+            raise FileNotFoundError(f"???workflow????????: {mock_path}")
+
+        yaml_text = mock_path.read_text(encoding="utf-8")
+        document, errors = self._workflow_validator.validate_yaml(yaml_text)
+        if errors:
+            error_text = self._format_validation_errors(errors)
+            raise ValueError(f"???workflow??????????????:\n{error_text}")
+
+        normalised_yaml = WorkflowSerializer.to_yaml(document)
+        self._write_text(workspace / "workflow.mock.yaml", normalised_yaml)
 
         self._jobs.update_status(
             job_id,
-            step_id="mock_agent",
-            job_status=JobStatus.SPEC_GENERATING,
+            step_id="mock_workflow",
+            job_status=JobStatus.ANALYSING,
             step_status=StepStatus.COMPLETED,
-            message="モック仕様の生成が完了しました",
+            message="???workflow????????",
         )
-        self._notify(job_id, progress_callback)
-
         self._jobs.update_status(
             job_id,
-            step_id="preview",
-            job_status=JobStatus.SPEC_GENERATING,
-            step_status=StepStatus.RUNNING,
-            message="モックプレビューを準備しています",
-        )
-        self._notify(job_id, progress_callback)
-
-        self._jobs.update_status(
-            job_id,
-            step_id="preview",
-            job_status=JobStatus.SPEC_GENERATING,
+            step_id="validation",
+            job_status=JobStatus.VALIDATING,
             step_status=StepStatus.COMPLETED,
-            message="モックプレビューを配信しました",
+            message="?????????????",
         )
         self._notify(job_id, progress_callback)
 
-        return spec
+        notes = [f"????????? '{request.mock_spec_id}' ????????"]
+        metadata = {
+            "mode": "mock",
+            "mock_spec_id": request.mock_spec_id,
+            "request": request.model_dump(),
+            "notes": notes,
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+        }
+        return WorkflowArtifacts(document=document, yaml_text=normalised_yaml, metadata=metadata, notes=notes)
 
+    # ------------------------------------------------------------------
     def _run_llm_pipeline(
         self,
         job_id: str,
+        prompt: str,
         request: GenerationRequest,
         workspace: Path,
         progress_callback: Callable[[GenerationJob], None] | None,
-    ) -> Dict[str, Any]:
-        prompt = (request.requirements_prompt or request.description or "").strip()
-        if not prompt:
-            raise ValueError("LLMモードでは requirements_prompt または description が必要です")
-
+    ) -> WorkflowArtifacts:
         llm = self._llm_factory.create_chat_model()
         retry_policy: RetryPolicy = self._llm_factory.get_retry_policy()
 
-        requirements_agent = RequirementsDecompositionAgent(llm, retry_policy)
-        classification_agent = AppTypeClassificationAgent(llm, retry_policy)
-        component_agent = ComponentSelectionAgent(llm, retry_policy)
-        data_flow_agent = DataFlowDesignAgent(llm, retry_policy)
-        validator_agent = SpecificationValidatorAgent(llm, retry_policy)
+        analyst = AnalystAgent(llm, retry_policy)
+        architect = ArchitectAgent(llm, retry_policy)
+        specialist = WorkflowSpecialistAgent(llm, retry_policy)
+        validator_feedback_agent = WorkflowValidatorAgent(llm, retry_policy)
 
         self._jobs.update_status(
             job_id,
-            step_id="requirements_decomposition",
-            job_status=JobStatus.SPEC_GENERATING,
+            step_id="analysis",
+            job_status=JobStatus.ANALYSING,
             step_status=StepStatus.RUNNING,
-            message="要件を分解しています",
+            message="LLM???????????",
         )
         self._notify(job_id, progress_callback)
-        requirements_result = requirements_agent.run(prompt)
-        self._write_json(workspace / "requirements_decomposition.json", requirements_result.model_dump())
+        analysis = analyst.run(prompt)
+        self._write_json(workspace / "analysis.json", analysis.model_dump(mode="json"))
         self._jobs.update_status(
             job_id,
-            step_id="requirements_decomposition",
-            job_status=JobStatus.SPEC_GENERATING,
+            step_id="analysis",
+            job_status=JobStatus.ANALYSING,
             step_status=StepStatus.COMPLETED,
-            message="要件分解が完了しました",
+            message="???????????",
         )
         self._notify(job_id, progress_callback)
 
         self._jobs.update_status(
             job_id,
-            step_id="app_type_classification",
-            job_status=JobStatus.SPEC_GENERATING,
+            step_id="architecture",
+            job_status=JobStatus.ARCHITECTING,
             step_status=StepStatus.RUNNING,
-            message="アプリタイプを分類しています",
+            message="LLM??????????????????",
         )
         self._notify(job_id, progress_callback)
-        classification_result = classification_agent.run(requirements_result)
-        self._write_json(workspace / "app_type_classification.json", classification_result.model_dump())
+        plan = architect.run(analysis)
+        self._write_json(workspace / "architecture_plan.json", plan.model_dump(mode="json"))
         self._jobs.update_status(
             job_id,
-            step_id="app_type_classification",
-            job_status=JobStatus.SPEC_GENERATING,
+            step_id="architecture",
+            job_status=JobStatus.ARCHITECTING,
             step_status=StepStatus.COMPLETED,
-            message="アプリタイプ分類が完了しました",
+            message="????????????????",
         )
         self._notify(job_id, progress_callback)
 
-        # Prepare steps for iterative selection/validation
-        self._jobs.update_status(
-            job_id,
-            step_id="component_selection",
-            job_status=JobStatus.SPEC_GENERATING,
-            step_status=StepStatus.RUNNING,
-            message="コンポーネントを選定しています",
-        )
-        self._notify(job_id, progress_callback)
+        notes: List[str] = []
+        attempt_records: List[Dict[str, Any]] = []
+        feedback_for_specialist: str | None = None
+        final_document: WorkflowDocument | None = None
+        final_yaml: str | None = None
 
-        feedback: str | None = None
-        component_result: ComponentSelectionResult | None = None
-        data_flow_result: DataFlowDesignResult | None = None
-        validation_result: ValidationResult | None = None
-
-        for attempt in range(1, LLM_VALIDATION_MAX_ATTEMPTS + 1):
-            attempt_message = f"コンポーネント選定を実行中 (試行 {attempt}/{LLM_VALIDATION_MAX_ATTEMPTS})"
+        for attempt in range(1, MAX_VALIDATION_ATTEMPTS + 1):
+            attempt_message = f"workflow.yaml ???????? (?? {attempt}/{MAX_VALIDATION_ATTEMPTS})"
             self._jobs.update_status(
                 job_id,
-                step_id="component_selection",
-                job_status=JobStatus.SPEC_GENERATING,
+                step_id="yaml_generation",
+                job_status=JobStatus.WORKFLOW_GENERATING,
                 step_status=StepStatus.RUNNING,
                 message=attempt_message,
-                log_entry=feedback,
+                log_entry=feedback_for_specialist,
             )
             self._notify(job_id, progress_callback)
 
-            component_result = component_agent.run(requirements_result, classification_result, self._catalog, feedback=feedback)
-            self._write_json(
-                workspace / f"component_selection_attempt_{attempt}.json",
-                component_result.model_dump(),
-            )
-
-            self._jobs.update_status(
-                job_id,
-                step_id="data_flow_design",
-                job_status=JobStatus.SPEC_GENERATING,
-                step_status=StepStatus.RUNNING,
-                message=f"データフローを設計しています (試行 {attempt})",
-            )
-            self._notify(job_id, progress_callback)
-
-            data_flow_result = data_flow_agent.run(requirements_result, classification_result, component_result)
-            self._write_json(
-                workspace / f"data_flow_design_attempt_{attempt}.json",
-                data_flow_result.model_dump(),
-            )
-            self._jobs.update_status(
-                job_id,
-                step_id="data_flow_design",
-                job_status=JobStatus.SPEC_GENERATING,
-                step_status=StepStatus.COMPLETED,
-                message="データフロー設計が完了しました",
-            )
-            self._notify(job_id, progress_callback)
+            draft = specialist.run(analysis, plan, feedback_for_specialist)
+            yaml_text = draft.workflow_yaml.strip()
+            if not yaml_text.endswith("\n"):
+                yaml_text += "\n"
+            self._write_text(workspace / f"workflow_attempt_{attempt}.yaml", yaml_text)
 
             self._jobs.update_status(
                 job_id,
                 step_id="validation",
-                job_status=JobStatus.SPEC_GENERATING,
+                job_status=JobStatus.VALIDATING,
                 step_status=StepStatus.RUNNING,
-                message=f"仕様を検証しています (試行 {attempt})",
+                message=f"?????????? (?? {attempt})",
             )
             self._notify(job_id, progress_callback)
 
-            validation_result = validator_agent.run(requirements_result, component_result, data_flow_result, self._catalog)
-            self._write_json(
-                workspace / f"validation_attempt_{attempt}.json",
-                validation_result.model_dump(),
+            document, errors = self._workflow_validator.validate_yaml(yaml_text)
+            attempt_records.append(
+                {
+                    "attempt": attempt,
+                    "errors": [err.__dict__ for err in errors],
+                    "feedback": feedback_for_specialist,
+                    "notes": draft.notes,
+                }
             )
 
-            if validation_result.success:
+            if errors:
+                error_text = self._format_validation_errors(errors)
+                self._write_text(workspace / f"validation_errors_attempt_{attempt}.log", error_text)
+                metadata_summary = self._build_metadata_summary(analysis, plan)
+                feedback = validator_feedback_agent.run(errors=error_text, metadata=metadata_summary)
+                feedback_for_specialist = "\n".join(feedback.suggestions or []) or error_text
+                notes.extend(draft.notes)
                 self._jobs.update_status(
                     job_id,
                     step_id="validation",
-                    job_status=JobStatus.SPEC_GENERATING,
-                    step_status=StepStatus.COMPLETED,
-                    message="仕様バリデーションが完了しました",
-                )
-                self._jobs.update_status(
-                    job_id,
-                    step_id="component_selection",
-                    job_status=JobStatus.SPEC_GENERATING,
-                    step_status=StepStatus.COMPLETED,
-                    message="コンポーネント選定が完了しました",
+                    job_status=JobStatus.VALIDATING,
+                    step_status=StepStatus.RUNNING,
+                    message=f"????????????????? (?? {attempt})????????",
+                    log_entry=error_text,
                 )
                 self._notify(job_id, progress_callback)
-                break
+                if attempt >= MAX_VALIDATION_ATTEMPTS:
+                    raise RuntimeError(f"workflow.yaml ??????????: {error_text}")
+                continue
 
-            feedback = self._format_validation_feedback(validation_result)
+            final_document = document
+            final_yaml = WorkflowSerializer.to_yaml(document)
+            self._write_text(workspace / "workflow.final.yaml", final_yaml)
+            notes.extend(draft.notes)
+
+            validator_summary = validator_feedback_agent.run(errors="[]", metadata=self._build_metadata_summary(analysis, plan))
+            notes.extend(validator_summary.suggestions)
+
+            self._jobs.update_status(
+                job_id,
+                step_id="yaml_generation",
+                job_status=JobStatus.WORKFLOW_GENERATING,
+                step_status=StepStatus.COMPLETED,
+                message="workflow.yaml ??????????",
+            )
             self._jobs.update_status(
                 job_id,
                 step_id="validation",
-                job_status=JobStatus.SPEC_GENERATING,
-                step_status=StepStatus.RUNNING,
-                message="バリデーションで修正が必要です。コンポーネントを再試行します。",
-                log_entry=feedback,
+                job_status=JobStatus.VALIDATING,
+                step_status=StepStatus.COMPLETED,
+                message="?????????????",
             )
             self._notify(job_id, progress_callback)
-        else:  # Exhausted retries
-            failure_message = feedback or "仕様バリデーションに失敗しました"
-            self._jobs.update_status(
-                job_id,
-                step_id="validation",
-                job_status=JobStatus.SPEC_GENERATING,
-                step_status=StepStatus.FAILED,
-                message=failure_message,
-            )
-            raise RuntimeError(failure_message)
+            break
+        else:
+            raise RuntimeError("workflow.yaml ?????????? (?????????)")
 
-        assert component_result is not None
-        assert data_flow_result is not None
-        assert validation_result is not None
+        if final_document is None or final_yaml is None:
+            raise RuntimeError("workflow.yaml ????????????????")
 
-        spec = self._build_llm_spec(
-            request,
-            prompt,
-            requirements_result,
-            classification_result,
-            component_result,
-            data_flow_result,
-            validation_result,
-        )
-        return spec
-
-    def _build_llm_spec(
-        self,
-        request: GenerationRequest,
-        prompt: str,
-        requirements: RequirementsDecompositionResult,
-        classification: AppTypeClassificationResult,
-        components: ComponentSelectionResult,
-        data_flow: DataFlowDesignResult,
-        validation: ValidationResult,
-    ) -> Dict[str, Any]:
-        frontend_fields = self._build_frontend_fields(components, requirements)
-        frontend_spec = {
-            "wizard": {
-                "steps": [label for _, label in LLM_STEP_DEFINITIONS],
-                "primary_color": "#1976d2",
-                "accent_color": "#009688",
-            },
-            "forms": [
-                {
-                    "step": 1,
-                    "title": requirements.primary_goal or "ユーザー入力",
-                    "fields": frontend_fields,
-                }
-            ],
+        metadata = {
+            "mode": "llm",
+            "request": request.model_dump(),
+            "analysis": analysis.model_dump(mode="json"),
+            "plan": plan.model_dump(mode="json"),
+            "attempts": attempt_records,
+            "notes": notes,
+            "generated_at": datetime.utcnow().isoformat() + "Z",
         }
 
-        backend_spec = {
-            "validation_rules": self._build_backend_rules(requirements, validation),
-        }
+        return WorkflowArtifacts(document=final_document, yaml_text=final_yaml, metadata=metadata, notes=notes)
 
-        tests_spec = {
-            "playwright": {
-                "scenarios": [
-                    {
-                        "name": "wizard-happy-path",
-                        "description": "Completes the wizard and downloads the generated zip",
-                    }
-                ]
-            }
-        }
-
-        docker_spec = {
-            "services": [
-                {"name": "web", "description": "React frontend"},
-                {"name": "api", "description": "FastAPI backend"},
-            ]
-        }
-
-        return {
-            "app": {
-                "name": request.project_name,
-                "slug": request.project_id,
-                "summary": requirements.summary,
-                "version": "0.2.0",
-                "type": classification.app_type,
-                "template": classification.recommended_template,
-            },
-            "source": {
-                "requirements_prompt": prompt,
-                "description": request.description,
-            },
-            "requirements": requirements.model_dump(),
-            "classification": classification.model_dump(),
-            "components": components.model_dump(),
-            "data_flow": data_flow.model_dump(),
-            "validation": validation.model_dump(),
-            "frontend": frontend_spec,
-            "backend": backend_spec,
-            "tests": tests_spec,
-            "docker": docker_spec,
-        }
-
-    def _build_frontend_fields(
-        self,
-        components: ComponentSelectionResult,
-        requirements: RequirementsDecompositionResult,
-    ) -> List[Dict[str, Any]]:
-        fields: List[Dict[str, Any]] = []
-        for placement in components.components:
-            try:
-                definition = self._catalog.get(placement.component_id)
-            except KeyError:
-                logger.warning("Unknown component '%s' returned by LLM", placement.component_id)
-                continue
-
-            if definition.category not in {"form", "input"}:
-                continue
-
-            binding = placement.props.get("binding") or placement.props.get("name")
-            label = placement.props.get("label") or definition.name
-            field_name = binding or self._slugify(label or placement.component_id, default="field")
-            label = label or field_name
-            field_type = self._infer_field_type(placement.component_id)
-            required = self._coerce_bool(placement.props.get("required"))
-
-            field: Dict[str, Any] = {
-                "name": field_name,
-                "label": label,
-                "type": field_type,
-                "required": required,
-            }
-
-            if placement.component_id == "file_upload":
-                accept = placement.props.get("accept")
-                if isinstance(accept, list):
-                    field["options"] = accept
-
-            fields.append(field)
-
-        if fields:
-            return fields
-
-        fallback_fields: List[Dict[str, Any]] = []
-        for item in requirements.requirements:
-            category = (item.category or "").upper()
-            if category != "INPUT":
-                continue
-            fallback_fields.append(
-                {
-                    "name": self._slugify(item.id or item.title, default="input"),
-                    "label": item.title,
-                    "type": "text",
-                    "required": True,
-                }
-            )
-
-        if not fallback_fields:
-            fallback_fields.append(
-                {
-                    "name": "userInput",
-                    "label": "ユーザー入力",
-                    "type": "text",
-                    "required": False,
-                }
-            )
-
-        return fallback_fields
-
-    def _build_backend_rules(
-        self,
-        requirements: RequirementsDecompositionResult,
-        validation: ValidationResult,
-    ) -> List[Dict[str, Any]]:
-        rules: List[Dict[str, Any]] = []
-        for item in requirements.requirements:
-            rule_id = self._slugify(item.id or item.title, default="rule")
-            category = (item.category or "").upper()
-            rules.append(
-                {
-                    "id": rule_id,
-                    "description": item.description or item.title,
-                    "severity": "warning" if category != "OUTPUT" else "info",
-                }
-            )
-
-        for issue in validation.errors:
-            rules.append(
-                {
-                    "id": issue.code,
-                    "description": issue.message,
-                    "severity": issue.level.lower(),
-                }
-            )
-
-        if not rules:
-            rules.append(
-                {
-                    "id": "llm-generated-check",
-                    "description": "LLM generated specification placeholder validation rule",
-                    "severity": "info",
-                }
-            )
-
-        return rules
-
-    @staticmethod
-    def _infer_field_type(component_id: str) -> str:
-        mapping = {
-            "text_input": "text",
-            "textarea": "textarea",
-            "file_upload": "file",
-        }
-        return mapping.get(component_id, "text")
-
-    @staticmethod
-    def _coerce_bool(value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return value.strip().lower() in {"true", "1", "yes", "y"}
-        if isinstance(value, (int, float)):
-            return bool(value)
-        return False
-
-    @staticmethod
-    def _slugify(value: str, default: str = "item") -> str:
-        cleaned = re.sub(r"[^0-9a-zA-Z]+", "-", value or "")
-        cleaned = cleaned.strip("-").lower()
-        return cleaned or default
-
-    def _format_validation_feedback(self, validation: ValidationResult) -> str:
-        if not validation.errors:
-            return "Validator returned no issues but success=false"
-        lines: List[str] = []
-        for issue in validation.errors:
-            level = issue.level.upper()
-            line = f"[{level}] {issue.code}: {issue.message}"
-            if issue.hint:
-                line += f" (hint: {issue.hint})"
-            lines.append(line)
+    # ------------------------------------------------------------------
+    def _format_validation_errors(self, errors: Iterable[WorkflowValidationError]) -> str:
+        lines = []
+        for err in errors:
+            lines.append(f"- path={err.path} code={err.code} message={err.message}")
         return "\n".join(lines)
+
+    def _build_metadata_summary(self, analysis: AnalystResult, plan: ArchitecturePlan) -> str:
+        ui_steps = ", ".join(f"{step.id}:{step.title}" for step in plan.ui_steps) or "(none)"
+        pipeline_steps = ", ".join(f"{step.id}/{step.type}" for step in plan.pipeline) or "(none)"
+        workflows = ", ".join(f"{wf.id}->{wf.provider_type}" for wf in plan.workflows) or "(none)"
+        return (
+            f"Goal: {analysis.primary_goal}\n"
+            f"UI Steps: {ui_steps}\n"
+            f"Pipeline: {pipeline_steps}\n"
+            f"Workflows: {workflows}"
+        )
 
     def _resolve_use_mock(self, request: GenerationRequest) -> bool:
         if request.use_mock is not None:
@@ -699,18 +409,19 @@ class GenerationPipeline:
         return self._config_manager.features.agents.use_mock
 
     def _select_steps(self, use_mock: bool) -> Sequence[tuple[str, str]]:
-        return MOCK_STEP_DEFINITIONS if use_mock else LLM_STEP_DEFINITIONS
+        return MOCK_STEP_DEFINITIONS if use_mock else WORKFLOW_STEP_DEFINITIONS
 
     @staticmethod
     def _write_json(path: Path, data: Dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def _notify(
-        self,
-        job_id: str,
-        callback: Callable[[GenerationJob], None] | None,
-    ) -> None:
+    @staticmethod
+    def _write_text(path: Path, text: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def _notify(self, job_id: str, callback: Callable[[GenerationJob], None] | None) -> None:
         if not callback:
             return
         snapshot = self._jobs.get(job_id)
@@ -719,5 +430,3 @@ class GenerationPipeline:
 
 
 pipeline = GenerationPipeline()
-
-

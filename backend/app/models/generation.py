@@ -11,8 +11,10 @@ from pydantic import BaseModel, Field, ConfigDict
 
 class JobStatus(str, Enum):
     RECEIVED = "received"
-    SPEC_GENERATING = "spec_generating"
-    TEMPLATES_RENDERING = "templates_rendering"
+    ANALYSING = "analysing"
+    ARCHITECTING = "architecting"
+    WORKFLOW_GENERATING = "workflow_generating"
+    VALIDATING = "validating"
     PACKAGING = "packaging"
     COMPLETED = "completed"
     FAILED = "failed"

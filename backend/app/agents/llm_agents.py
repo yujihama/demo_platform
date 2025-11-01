@@ -1,4 +1,4 @@
-"""Concrete structured LLM agents used in the generation pipeline."""
+"""Concrete structured LLM agents for workflow YAML generation."""
 
 from __future__ import annotations
 
@@ -8,19 +8,13 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 
 from ..services.llm_factory import RetryPolicy
-from ..services.ui_catalog import UIPartsCatalog
 from .base import StructuredLLMAgent
-from .models import (
-    AppTypeClassificationResult,
-    ComponentPlacement,
-    ComponentSelectionResult,
-    DataFlowDesignResult,
-    RequirementsDecompositionResult,
-    ValidationResult,
-)
+from .models import AnalystResult, ArchitecturePlan, ValidatorFeedback, WorkflowDraft
 
 
-class RequirementsDecompositionAgent(StructuredLLMAgent[RequirementsDecompositionResult]):
+class AnalystAgent(StructuredLLMAgent[AnalystResult]):
+    """Breaks down user intents into structured requirements."""
+
     def __init__(self, llm: BaseChatModel, retry_policy: RetryPolicy) -> None:
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -28,32 +22,39 @@ class RequirementsDecompositionAgent(StructuredLLMAgent[RequirementsDecompositio
                     "system",
                     dedent(
                         """
-                        You are a senior product requirements analyst. Break down user prompts into numbered, atomic requirements.
-                        - Create concise titles and detailed descriptions.
-                        - Categorise each requirement as INPUT, PROCESSING, or OUTPUT.
-                        - Provide acceptance criteria bullet points describing measurable outcomes.
+                        You are an analyst for a declarative workflow platform.
+                        Analyse the user request and extract structured requirements.
+                        - Summarise the primary business goal.
+                        - Describe the domain context (target users, data sources, constraints).
+                        - Enumerate functional requirements with ids (REQ-1 style), category (input/process/output/validation),
+                          detailed description, and measurable acceptance criteria.
+                        - List notable risks or unclear assumptions.
+                        - Provide example user inputs or payloads if applicable.
+                        Always respond in Japanese when appropriate.
                         """
                     ).strip(),
                 ),
                 (
                     "human",
-                    "User prompt:\n{user_prompt}\n\nReturn the structured requirements list.",
+                    "???????:\n{user_prompt}\n\n????????????????????????",
                 ),
             ]
         )
         super().__init__(
-            name="requirements_decomposition",
+            name="analyst",
             llm=llm,
             prompt=prompt,
-            output_model=RequirementsDecompositionResult,
+            output_model=AnalystResult,
             retry_policy=retry_policy,
         )
 
-    def run(self, user_prompt: str) -> RequirementsDecompositionResult:
+    def run(self, user_prompt: str) -> AnalystResult:
         return self.invoke(user_prompt=user_prompt)
 
 
-class AppTypeClassificationAgent(StructuredLLMAgent[AppTypeClassificationResult]):
+class ArchitectAgent(StructuredLLMAgent[ArchitecturePlan]):
+    """Designs UI wizard and backend pipeline based on analyst findings."""
+
     def __init__(self, llm: BaseChatModel, retry_policy: RetryPolicy) -> None:
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -61,35 +62,37 @@ class AppTypeClassificationAgent(StructuredLLMAgent[AppTypeClassificationResult]
                     "system",
                     dedent(
                         """
-                        You classify applications for an AI code generation platform.
-                        Choose the best matching type from: TYPE_CRUD, TYPE_DOCUMENT_PROCESSOR, TYPE_VALIDATION, TYPE_ANALYTICS, TYPE_CHATBOT.
-                        Explain the rationale and reference supporting requirement identifiers.
-                        Recommend a template name such as `document-processor-basic` or `validation-workflow-basic`.
+                        You are the architect of a workflow-driven application builder.
+                        Using the analyst report, produce an execution plan:
+                        - Break the user journey into wizard UI steps with titles, descriptions, and component ids (snake_case).
+                        - Outline pipeline steps referencing component outputs and external workflow providers.
+                        - Identify external providers (e.g. Dify flows) with id, provider_type, endpoint, and purpose.
+                        Use concise Japanese labels. Prefer deterministic naming (lowercase, hyphen or snake_case).
                         """
                     ).strip(),
                 ),
                 (
                     "human",
-                    "Summary:{summary}\n\nRequirements:\n{requirements_text}",
+                    "??????:\n{analysis}\n\n????????????????????????",
                 ),
             ]
         )
         super().__init__(
-            name="app_type_classification",
+            name="architect",
             llm=llm,
             prompt=prompt,
-            output_model=AppTypeClassificationResult,
+            output_model=ArchitecturePlan,
             retry_policy=retry_policy,
         )
 
-    def run(self, requirements: RequirementsDecompositionResult) -> AppTypeClassificationResult:
-        return self.invoke(
-            summary=requirements.summary,
-            requirements_text=_format_requirements(requirements),
-        )
+    def run(self, analysis: AnalystResult) -> ArchitecturePlan:
+        text = _format_analysis(analysis)
+        return self.invoke(analysis=text)
 
 
-class ComponentSelectionAgent(StructuredLLMAgent[ComponentSelectionResult]):
+class WorkflowSpecialistAgent(StructuredLLMAgent[WorkflowDraft]):
+    """Transforms the architecture plan into workflow.yaml content."""
+
     def __init__(self, llm: BaseChatModel, retry_policy: RetryPolicy) -> None:
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -97,60 +100,40 @@ class ComponentSelectionAgent(StructuredLLMAgent[ComponentSelectionResult]):
                     "system",
                     dedent(
                         """
-                        You select UI components for a low-code platform using a predefined component catalogue.
-                        - Use only components listed in the catalogue.
-                        - Assign each component to a slot such as 'hero', 'sidebar', 'main', or 'footer'.
-                        - Provide props with serialisable values.
-                        - Map each component to requirement identifiers it fulfills.
-                        Provide at least one component fulfilling every requirement.
+                        You are a workflow YAML specialist. Generate a complete workflow.yaml document.
+                        - Honour the provided architecture plan exactly.
+                        - Schema: version, info (name, summary, version), workflows (list), pipeline (list), ui (layout, steps).
+                        - Use snake_case identifiers. Ensure every identifier matches the plan.
+                        - pipeline[].type must be one of: call_workflow, transform, for_each, set_state, branch.
+                        - call_workflow steps must reference a provider id defined in workflows.
+                        - UI steps layout is "wizard" with ordered steps and component ids.
+                        - Include bindings so that UI components consume pipeline outputs when relevant (e.g. results_table binds to pipeline result).
+                        Output JSON with fields workflow_yaml (string) and notes (array of short tips).
                         """
                     ).strip(),
                 ),
                 (
                     "human",
-                    dedent(
-                        """
-                        Application type: {app_type}
-                        Recommended template: {template}
-
-                        Component catalogue:
-                        {catalogue}
-
-                        Requirements:
-                        {requirements_text}
-
-                        Validator feedback (if any):
-                        {feedback}
-                        """
-                    ).strip(),
+                    "?????????:\n{plan}\n\n???????????YAML??????????",
                 ),
             ]
         )
         super().__init__(
-            name="component_selection",
+            name="workflow_specialist",
             llm=llm,
             prompt=prompt,
-            output_model=ComponentSelectionResult,
+            output_model=WorkflowDraft,
             retry_policy=retry_policy,
         )
 
-    def run(
-        self,
-        requirements: RequirementsDecompositionResult,
-        classification: AppTypeClassificationResult,
-        catalog: UIPartsCatalog,
-        feedback: str | None = None,
-    ) -> ComponentSelectionResult:
-        return self.invoke(
-            app_type=classification.app_type,
-            template=classification.recommended_template,
-            catalogue=_summarise_catalog(catalog, classification.app_type),
-            requirements_text=_format_requirements(requirements),
-            feedback=feedback or "??",
-        )
+    def run(self, analysis: AnalystResult, plan: ArchitecturePlan, feedback: str | None = None) -> WorkflowDraft:
+        plan_text = _format_plan(analysis, plan, feedback)
+        return self.invoke(plan=plan_text)
 
 
-class DataFlowDesignAgent(StructuredLLMAgent[DataFlowDesignResult]):
+class WorkflowValidatorAgent(StructuredLLMAgent[ValidatorFeedback]):
+    """Summarises validation issues and produces human feedback."""
+
     def __init__(self, llm: BaseChatModel, retry_policy: RetryPolicy) -> None:
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -158,142 +141,67 @@ class DataFlowDesignAgent(StructuredLLMAgent[DataFlowDesignResult]):
                     "system",
                     dedent(
                         """
-                        You design deterministic data flows between selected UI components.
-                        - Connect components respecting triggers and actions.
-                        - Define state variables with snake_case names.
-                        - Ensure each flow references requirement identifiers that it satisfies.
+                        You review workflow YAML validation errors and craft remediation guidance for the specialist agent.
+                        - When error list is empty, set is_valid=true and offer deployment tips.
+                        - Otherwise set is_valid=false, summarise each error in Japanese, and propose concrete fixes referencing sections (e.g., workflows[0].id).
+                        Respond using structured JSON fields.
                         """
                     ).strip(),
                 ),
                 (
                     "human",
-                    dedent(
-                        """
-                        Application type: {app_type}
-                        Requirements:
-                        {requirements_text}
-
-                        Selected components:
-                        {components_text}
-                        """
-                    ).strip(),
+                    "????:\n{errors}\n\n???YAML????:\n{metadata}\n",
                 ),
             ]
         )
         super().__init__(
-            name="data_flow_design",
+            name="workflow_validator_feedback",
             llm=llm,
             prompt=prompt,
-            output_model=DataFlowDesignResult,
+            output_model=ValidatorFeedback,
             retry_policy=retry_policy,
         )
 
-    def run(
-        self,
-        requirements: RequirementsDecompositionResult,
-        classification: AppTypeClassificationResult,
-        components: ComponentSelectionResult,
-    ) -> DataFlowDesignResult:
-        return self.invoke(
-            app_type=classification.app_type,
-            requirements_text=_format_requirements(requirements),
-            components_text=_format_components(components),
+    def run(self, errors: str, metadata: str) -> ValidatorFeedback:
+        return self.invoke(errors=errors, metadata=metadata)
+
+
+def _format_analysis(analysis: AnalystResult) -> str:
+    requirement_lines = []
+    for req in analysis.requirements:
+        ac = " / ".join(req.acceptance_criteria) if req.acceptance_criteria else "(????????)"
+        requirement_lines.append(f"- {req.id} [{req.category}] {req.title}: {req.detail} | AC: {ac}")
+    risks = "\n".join(f"- {risk}" for risk in analysis.risks) or "- ?????"
+    inputs = "\n".join(f"- {example}" for example in analysis.sample_inputs) or "- ????"
+    return (
+        f"Primary Goal: {analysis.primary_goal}\n"
+        f"Domain Context: {analysis.domain_context}\n"
+        f"Requirements:\n{chr(10).join(requirement_lines)}\n"
+        f"Risks:\n{risks}\n"
+        f"Sample Inputs:\n{inputs}"
+    )
+
+
+def _format_plan(analysis: AnalystResult, plan: ArchitecturePlan, feedback: str | None) -> str:
+    steps = []
+    for step in plan.ui_steps:
+        components = ", ".join(step.components) or "components not specified"
+        steps.append(f"- {step.id}: {step.title} ({components}) -> next: {step.success_transition or 'end'}")
+    pipeline_steps = []
+    for step in plan.pipeline:
+        pipeline_steps.append(
+            f"- {step.id} [{step.type}] provider={step.uses_provider or 'n/a'} inputs={', '.join(step.inputs) or '-'} outputs={', '.join(step.outputs) or '-'}"
         )
+    workflow_refs = []
+    for ref in plan.workflows:
+        workflow_refs.append(f"- {ref.id} ({ref.provider_type}) {ref.endpoint}: {ref.description}")
+    formatted_feedback = feedback or "(?????????????????????)"
+    return (
+        f"User Goal: {analysis.primary_goal}\n"
+        f"UI Steps:\n{chr(10).join(steps)}\n"
+        f"Pipeline Steps:\n{chr(10).join(pipeline_steps)}\n"
+        f"Workflows:\n{chr(10).join(workflow_refs)}\n"
+        f"Previous Feedback:\n{formatted_feedback}"
+    )
 
-
-class SpecificationValidatorAgent(StructuredLLMAgent[ValidationResult]):
-    def __init__(self, llm: BaseChatModel, retry_policy: RetryPolicy) -> None:
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    dedent(
-                        """
-                        You validate specifications for an AI-generated application.
-                        - Ensure every component exists in the supplied catalogue.
-                        - Verify component props align with the catalogue definitions.
-                        - Ensure data flows reference existing components and state variables.
-                        - Detect circular dependencies between flows.
-                        - Confirm every requirement identifier is fulfilled by at least one component or data flow.
-                        Return success=true when the specification passes all checks; otherwise list detailed issues with hints.
-                        """
-                    ).strip(),
-                ),
-                (
-                    "human",
-                    dedent(
-                        """
-                        Catalogue:
-                        {catalogue}
-
-                        Requirements:
-                        {requirements_text}
-
-                        Components:
-                        {components_text}
-
-                        Data flows:
-                        {flows_text}
-                        """
-                    ).strip(),
-                ),
-            ]
-        )
-        super().__init__(
-            name="validator",
-            llm=llm,
-            prompt=prompt,
-            output_model=ValidationResult,
-            retry_policy=retry_policy,
-        )
-
-    def run(
-        self,
-        requirements: RequirementsDecompositionResult,
-        components: ComponentSelectionResult,
-        flows: DataFlowDesignResult,
-        catalog: UIPartsCatalog,
-    ) -> ValidationResult:
-        return self.invoke(
-            catalogue=_summarise_catalog(catalog),
-            requirements_text=_format_requirements(requirements),
-            components_text=_format_components(components),
-            flows_text=_format_flows(flows),
-        )
-
-
-def _format_requirements(requirements: RequirementsDecompositionResult) -> str:
-    lines = [f"- {item.id} ({item.category}): {item.title} - {item.description}" for item in requirements.requirements]
-    return "\n".join(lines)
-
-
-def _format_components(selection: ComponentSelectionResult) -> str:
-    lines: list[str] = []
-    for component in selection.components:
-        prop_str = ", ".join(f"{key}={value}" for key, value in component.props.items()) or "no props"
-        fulfills = ", ".join(component.fulfills) or "none"
-        lines.append(f"- {component.component_id} @ {component.slot} ({prop_str}) -> {fulfills}")
-    return "\n".join(lines)
-
-
-def _format_flows(flows: DataFlowDesignResult) -> str:
-    lines: list[str] = []
-    for edge in flows.flows:
-        refs = ", ".join(edge.requirement_refs) or "none"
-        lines.append(
-            f"- {edge.step}: {edge.source_component} --[{edge.trigger}/{edge.action}]--> {edge.target_component} ({refs})"
-        )
-    state_lines = [f"state {var.name}: {var.type} (init={var.initial_value})" for var in flows.state]
-    return "\n".join(state_lines + lines)
-
-
-def _summarise_catalog(catalog: UIPartsCatalog, app_type: str | None = None) -> str:
-    lines: list[str] = []
-    for definition in catalog.components.values():
-        if app_type and not definition.supports_app_type(app_type):
-            continue
-        props = ", ".join(f"{name}:{prop.type}{'!' if prop.required else ''}" for name, prop in definition.props.items())
-        applicable = ", ".join(definition.applicable_app_types) or "all"
-        lines.append(f"- {definition.id} ({definition.category}, {applicable}) props[{props}]")
-    return "\n".join(lines)
 
