@@ -1,71 +1,53 @@
-"""API router definitions for the generation backend."""
+"""API router definitions for the declarative workflow backend."""
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 
 from .config import config_manager
-from .models.generation import GenerationRequest, GenerationResponse, GenerationStatusResponse
-from .services.jobs import job_registry
-from .services.pipeline import GenerationPipeline, pipeline
-from .services.preview import MockPreviewService
+from .models import (
+    PackageCreateRequest,
+    PackageCreateResponse,
+    WorkflowGenerationRequest,
+    WorkflowGenerationResponse,
+)
+from .services.packaging import packaging_service, packaging_registry
+from .services.workflow_generation import workflow_generation_service
 
 
-def get_pipeline() -> GenerationPipeline:
-    return pipeline
+router = APIRouter(prefix="/api", tags=["workflows"])
 
 
-preview_service = MockPreviewService(Path("mock/previews"))
+@router.post("/workflows/generate", response_model=WorkflowGenerationResponse)
+async def generate_workflow(payload: WorkflowGenerationRequest) -> WorkflowGenerationResponse:
+    return workflow_generation_service.generate(payload)
 
 
-router = APIRouter(prefix="/api", tags=["generation"])
+@router.post("/packages", response_model=PackageCreateResponse)
+async def create_package(payload: PackageCreateRequest) -> PackageCreateResponse:
+    return packaging_service.create_package(payload)
 
 
-@router.post("/generate", response_model=GenerationResponse)
-async def create_generation_job(
-    payload: GenerationRequest,
-    background_tasks: BackgroundTasks,
-    pipeline: GenerationPipeline = Depends(get_pipeline),
-) -> GenerationResponse:
-    job = pipeline.enqueue(payload, background_tasks)
-    return GenerationResponse(job_id=job.job_id, status=job.status)
-
-
-@router.get("/generate/{job_id}", response_model=GenerationStatusResponse)
-async def get_generation_job(job_id: str) -> GenerationStatusResponse:
-    job = job_registry.get(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return GenerationStatusResponse(
-        job_id=job.job_id,
-        status=job.status,
-        steps=job.steps,
-        download_url=job.download_url,
-        metadata=job.metadata or None,
-    )
-
-
-@router.get("/generate/{job_id}/download")
-async def download_artifact(job_id: str) -> FileResponse:
-    job = job_registry.get(job_id)
-    if job is None or not job.output_path:
-        raise HTTPException(status_code=404, detail="Artifact not ready")
-    return FileResponse(path=job.output_path, filename="app.zip", media_type="application/zip")
-
-
-@router.get("/preview/{spec_id}")
-async def get_preview(spec_id: str) -> HTMLResponse:
-    try:
-        html = preview_service.get_preview_html(spec_id)
-    except FileNotFoundError as exc:  # noqa: PERF203 - explicit mapping
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return HTMLResponse(content=html)
+@router.get("/packages/{package_id}/download")
+async def download_package(package_id: str) -> FileResponse:
+    entry = packaging_registry.get(package_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Package not found")
+    descriptor, path = entry
+    return FileResponse(path=path, filename=descriptor.filename, media_type="application/zip")
 
 
 @router.get("/config/features")
 async def get_features_config() -> dict:
-    return config_manager.features.model_dump()
+    features = config_manager.features
+    return {
+        "default_mock": features.agents.use_mock,
+        "frontend": {
+            "base_url": features.frontend.base_url,
+        },
+        "backend": {
+            "base_url": features.backend.base_url,
+        },
+    }
 
