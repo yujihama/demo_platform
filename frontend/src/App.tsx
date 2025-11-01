@@ -75,7 +75,24 @@ export default function App() {
         environment_variables: {}
       });
       setPackageInfo(response.package);
-      window.location.href = response.package.download_url;
+
+      const rawBackendBaseUrl =
+        features?.backend.base_url ?? import.meta.env.VITE_BACKEND_URL ?? window.location.origin;
+      let resolvedBackendBaseUrl = window.location.origin;
+      try {
+        resolvedBackendBaseUrl = new URL(rawBackendBaseUrl, window.location.origin).toString();
+      } catch (resolutionError) {
+        logger.warn("バックエンドのベース URL を解決できませんでした", resolutionError);
+      }
+
+      let downloadUrl = response.package.download_url;
+      try {
+        downloadUrl = new URL(response.package.download_url, resolvedBackendBaseUrl).toString();
+      } catch (urlError) {
+        logger.warn("ダウンロード URL の解決に失敗しました", urlError);
+      }
+
+      window.location.href = downloadUrl;
     } catch (err) {
       logger.error("パッケージ作成に失敗", err);
       setError("パッケージの生成に失敗しました。時間をおいて再試行してください。");
