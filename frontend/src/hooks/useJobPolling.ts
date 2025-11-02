@@ -8,7 +8,11 @@ type PollingState = {
   error: string | null;
 };
 
-export function useJobPolling(jobId: string | null, intervalMs = 2000) {
+export function useJobPolling(
+  jobId: string | null,
+  intervalMs = 2000,
+  fetcher: (jobId: string) => Promise<GenerationStatus> = fetchJob
+) {
   const [state, setState] = useState<PollingState>({
     status: null,
     loading: Boolean(jobId),
@@ -27,7 +31,7 @@ export function useJobPolling(jobId: string | null, intervalMs = 2000) {
   const tick = useCallback(async () => {
     if (!jobId) return;
     try {
-      const result = await fetchJob(jobId);
+      const result = await fetcher(jobId);
       setState({ status: result, loading: false, error: null });
       if (result.status === "completed" || result.status === "failed") {
         stop();
@@ -36,7 +40,7 @@ export function useJobPolling(jobId: string | null, intervalMs = 2000) {
       stop();
       setState((prev) => ({ ...prev, loading: false, error: "進捗の取得に失敗しました" }));
     }
-  }, [jobId, stop]);
+  }, [fetcher, jobId, stop]);
 
   useEffect(() => {
     if (!jobId) {

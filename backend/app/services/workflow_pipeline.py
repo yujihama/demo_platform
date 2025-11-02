@@ -48,11 +48,11 @@ class WorkflowGenerationPipeline:
         """Enqueue a workflow generation job."""
         job_id = str(uuid4())
         step_definitions = [
-            ("analysis", "????"),
-            ("architecture", "?????????"),
-            ("yaml_generation", "YAML??"),
-            ("validation", "???????"),
-            ("packaging", "???????"),
+            ("analysis", "要件分析"),
+            ("architecture", "アーキテクチャ設計"),
+            ("yaml_generation", "workflow.yaml 生成"),
+            ("validation", "仕様バリデーション"),
+            ("packaging", "パッケージング"),
         ]
         job = self._jobs.create_job(job_id, request, step_definitions)
         background_tasks.add_task(self._run_job, job.job_id, request)
@@ -80,13 +80,13 @@ class WorkflowGenerationPipeline:
                 step_id="analysis",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.RUNNING,
-                message="??????????",
+                message="要件を解析しています",
             )
             self._notify(job_id, progress_callback)
-            
+
             prompt = (request.requirements_prompt or request.description or "").strip()
             if not prompt:
-                raise ValueError("requirements_prompt ??? description ?????")
+                raise ValueError("requirements_prompt または description のいずれかは必須です")
             
             llm = self._llm_factory.create_chat_model()
             retry_policy = self._llm_factory.get_retry_policy()
@@ -99,7 +99,7 @@ class WorkflowGenerationPipeline:
                 step_id="analysis",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.COMPLETED,
-                message="???????????",
+                message="要件分析が完了しました",
             )
             self._notify(job_id, progress_callback)
             
@@ -109,7 +109,7 @@ class WorkflowGenerationPipeline:
                 step_id="architecture",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.RUNNING,
-                message="???????????????",
+                message="ワークフロー構造を設計しています",
             )
             self._notify(job_id, progress_callback)
             
@@ -121,7 +121,7 @@ class WorkflowGenerationPipeline:
                 step_id="architecture",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.COMPLETED,
-                message="????????????????",
+                message="アーキテクチャ設計が完了しました",
             )
             self._notify(job_id, progress_callback)
             
@@ -131,7 +131,7 @@ class WorkflowGenerationPipeline:
                 step_id="yaml_generation",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.RUNNING,
-                message="workflow.yaml????????",
+                message="workflow.yaml を生成しています",
             )
             self._notify(job_id, progress_callback)
             
@@ -147,14 +147,14 @@ class WorkflowGenerationPipeline:
             )
             
             if not success:
-                raise RuntimeError(f"YAML?????????: {'; '.join(errors)}")
+                raise RuntimeError(f"workflow.yaml の生成に失敗しました: {'; '.join(errors)}")
             
             self._jobs.update_status(
                 job_id,
                 step_id="yaml_generation",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.COMPLETED,
-                message="workflow.yaml??????????",
+                message="workflow.yaml の生成が完了しました",
             )
             self._notify(job_id, progress_callback)
             
@@ -164,14 +164,14 @@ class WorkflowGenerationPipeline:
                 step_id="validation",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.RUNNING,
-                message="?????????????????",
+                message="生成された workflow.yaml を検証しています",
             )
             self._notify(job_id, progress_callback)
             
             validation_result = self._validator.validate_complete(yaml_content)
             if not validation_result["valid"]:
                 raise RuntimeError(
-                    f"??????????: {'; '.join(validation_result['all_errors'])}"
+                    f"workflow.yaml の検証に失敗しました: {'; '.join(validation_result['all_errors'])}"
                 )
             
             self._jobs.update_status(
@@ -179,7 +179,7 @@ class WorkflowGenerationPipeline:
                 step_id="validation",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.COMPLETED,
-                message="??????????????",
+                message="workflow.yaml の検証が完了しました",
             )
             self._notify(job_id, progress_callback)
             
@@ -189,13 +189,13 @@ class WorkflowGenerationPipeline:
                 step_id="packaging",
                 job_status=JobStatus.PACKAGING,
                 step_status=StepStatus.RUNNING,
-                message="?????????????????????",
+                message="成果物をパッケージングしています",
             )
             self._notify(job_id, progress_callback)
             
             job_snapshot = self._jobs.get(job_id)
             if job_snapshot is None:
-                raise RuntimeError("Job snapshot missing during packaging")
+                raise RuntimeError("パッケージング中にジョブ情報を取得できませんでした")
             
             validation_metadata = dict(validation_result)
             validation_model = validation_metadata.get("model")

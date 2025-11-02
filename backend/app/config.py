@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
-from pydantic import BaseModel, Field, validator, model_validator
+from pydantic import BaseModel, Field, model_validator, validator
 
 
 class FrontendSettings(BaseModel):
@@ -133,6 +134,14 @@ class DifyConfig(BaseModel):
     mock: DifyEnvironmentConfig
     production: DifyEnvironmentConfig
 
+    def get_active_environment(self) -> DifyEnvironmentConfig:
+        """Return the configuration matching the current provider mode."""
+
+        mode = self.mode.lower()
+        if mode == "dify":
+            return self.production
+        return self.mock
+
 
 class ConfigBundle(BaseModel):
     features: FeatureConfig
@@ -153,6 +162,7 @@ class ConfigManager:
         self._llm_path = llm_path
         self._dify_path = dify_path
         self._bundle: Optional[ConfigBundle] = None
+        self._env_loaded = False
 
     # ------------------------------------------------------------------
     def load(self, force: bool = False) -> ConfigBundle:
@@ -160,6 +170,9 @@ class ConfigManager:
 
         if self._bundle is not None and not force:
             return self._bundle
+
+        if not self._env_loaded:
+            self._load_env_file(Path(".env"))
 
         features = self._load_yaml(self._features_path)
         llm = self._load_yaml(self._llm_path)
@@ -170,6 +183,7 @@ class ConfigManager:
             llm=LLMConfig(**llm),
             dify=DifyConfig(**dify),
         )
+        bundle = self._apply_env_overrides(bundle)
         self._bundle = bundle
         return bundle
 
@@ -190,6 +204,53 @@ class ConfigManager:
     def export_metadata(self) -> Dict[str, Any]:
         bundle = self.load()
         return json.loads(bundle.model_dump_json())
+
+    # ------------------------------------------------------------------
+    def _load_env_file(self, path: Path) -> None:
+        if not path.exists():
+            self._env_loaded = True
+            return
+
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            key = key.strip()
+            if not key or key in os.environ:
+                continue
+            os.environ[key] = value.strip()
+
+        self._env_loaded = True
+
+    # ------------------------------------------------------------------
+    def _apply_env_overrides(self, bundle: ConfigBundle) -> ConfigBundle:
+        dify = bundle.dify.model_copy(deep=True)
+
+        provider = os.getenv("WORKFLOW_PROVIDER")
+        if provider:
+            normalized = provider.strip().lower()
+            if normalized in {"mock", "dify"}:
+                dify.mode = normalized
+                dify.enabled = normalized == "dify"
+
+        if dify.mode.lower() == "dify":
+            endpoint = os.getenv("DIFY_API_ENDPOINT") or dify.production.base_url
+            api_key = os.getenv("DIFY_API_KEY") or dify.production.api_key
+            dify.production = dify.production.model_copy(
+                update={
+                    "base_url": endpoint,
+                    "api_key": api_key,
+                }
+            )
+            dify.enabled = True
+        else:
+            mock_endpoint = os.getenv("MOCK_API_ENDPOINT")
+            if mock_endpoint:
+                dify.mock = dify.mock.model_copy(update={"base_url": mock_endpoint})
+            dify.enabled = False
+
+        return bundle.model_copy(update={"dify": dify})
 
     # ------------------------------------------------------------------
     @staticmethod

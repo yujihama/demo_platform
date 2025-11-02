@@ -1,5 +1,10 @@
 import axios from "axios";
-import type { FeaturesConfig, GenerationRequest, GenerationResponse, GenerationStatus } from "./types";
+import type {
+  FeaturesConfig,
+  GenerationRequest,
+  GenerationResponse,
+  GenerationStatus
+} from "./types";
 
 const client = axios.create({
   baseURL: import.meta.env.VITE_BACKEND_URL ?? "/api"
@@ -12,6 +17,16 @@ export async function createGenerationJob(payload: GenerationRequest) {
 
 export async function fetchJob(jobId: string) {
   const { data } = await client.get<GenerationStatus>(`/generate/${jobId}`);
+  return data;
+}
+
+export async function createWorkflowJob(payload: GenerationRequest) {
+  const { data } = await client.post<GenerationResponse>('/workflows/generate', payload);
+  return data;
+}
+
+export async function fetchWorkflowJob(jobId: string) {
+  const { data } = await client.get<GenerationStatus>(`/workflows/generate/${jobId}`);
   return data;
 }
 
