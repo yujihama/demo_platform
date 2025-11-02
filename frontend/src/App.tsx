@@ -24,7 +24,8 @@ import type { UIComponent, UIStep, WorkflowYaml } from "./types";
 
 function resolvePath(source: Record<string, unknown> | undefined, path: string | undefined) {
   if (!source || !path) return undefined;
-  const segments = path.split(".");
+  const normalizedPath = path.startsWith("view.") ? path.slice("view.".length) : path;
+  const segments = normalizedPath.split(".");
   let current: unknown = source;
   for (const segment of segments) {
     if (typeof current !== "object" || current === null) return undefined;
