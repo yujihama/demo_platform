@@ -103,7 +103,7 @@ async def create_conversation(
         project_name=f"Generated from conversation",
         description=payload.prompt,
         requirements_prompt=payload.prompt,
-        use_mock=False,  # Use LLM pipeline for conversations
+        use_mock=config_manager.features.agents.use_mock,
     )
     
     # Start workflow generation in background
