@@ -1,282 +1,393 @@
 import { useEffect, useMemo, useState } from "react";
-import { Box, Container, Paper, Stack, Typography, Tabs, Tab } from "@mui/material";
+import {
+  Alert,
+  Box,
+  Button,
+  CircularProgress,
+  Container,
+  Paper,
+  Stack,
+  Step,
+  StepLabel,
+  Stepper,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
+  Typography
+} from "@mui/material";
 
-import { StepRequirements } from "./components/StepRequirements";
-import { StepProgress } from "./components/StepProgress";
-import { StepPreview } from "./components/StepPreview";
-import { StepLogs } from "./components/StepLogs";
-import { StepDownload } from "./components/StepDownload";
-import { ErrorBanner } from "./components/ErrorBanner";
-import { createGenerationJob, fetchFeaturesConfig } from "./api";
-import type { FeaturesConfig, GenerationRequest, GenerationStatus, JobStep } from "./types";
-import { useJobPolling } from "./hooks/useJobPolling";
-import { usePreview } from "./hooks/usePreview";
+import {
+  createWorkflowSession,
+  executeWorkflow,
+  fetchWorkflowDefinition,
+  fetchWorkflowSession,
+  uploadWorkflowInput
+} from "./api";
+import type { SessionState, UIComponent, UIStep, WorkflowYaml } from "./types";
+import { resolvePath } from "./utils/path";
 import { logger } from "./utils/logger";
 
-const STEP_NAME_MAP: Record<string, string> = {
-  requirements: "要件受付",
-  requirements_decomposition: "要件分解",
-  app_type_classification: "アプリタイプ分類",
-  component_selection: "コンポーネント選定",
-  data_flow_design: "データフロー設計",
-  validation: "仕様バリデーション",
-  mock_agent: "モック仕様",
-  preview: "プレビュー",
-  template_generation: "テンプレート生成",
-  backend_setup: "バックエンド構築",
-  testing: "テスト準備",
-  packaging: "パッケージング"
-};
+const SESSION_STORAGE_KEY = "workflow_session_id";
 
 export default function App() {
-  const [features, setFeatures] = useState<FeaturesConfig | null>(null);
+  const [workflow, setWorkflow] = useState<WorkflowYaml | null>(null);
+  const [session, setSession] = useState<SessionState | null>(null);
   const [activeStep, setActiveStep] = useState(0);
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [specId, setSpecId] = useState<string | null>(null);
-  const [submitLoading, setSubmitLoading] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  const [previewApproved, setPreviewApproved] = useState(false);
-  const [lastUseMock, setLastUseMock] = useState(true);
+  const [initialising, setInitialising] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [uploading, setUploading] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
-    let active = true;
-    fetchFeaturesConfig()
-      .then((config) => {
-        if (!active) return;
-        setFeatures(config);
-        setLastUseMock(config.agents.use_mock);
-      })
-      .catch((error) => logger.warn("Failed to load feature config", error));
+    let cancelled = false;
+    const initialise = async () => {
+      try {
+        const loadedWorkflow = await fetchWorkflowDefinition();
+        if (cancelled) return;
+        setWorkflow(loadedWorkflow);
+
+        let sessionId = localStorage.getItem(SESSION_STORAGE_KEY);
+        let sessionState: SessionState | null = null;
+
+        if (sessionId) {
+          try {
+            sessionState = await fetchWorkflowSession(sessionId);
+          } catch (fetchError) {
+            logger.warn("Failed to load existing session, creating new one", fetchError);
+            sessionState = null;
+          }
+        }
+
+        if (!sessionState) {
+          sessionState = await createWorkflowSession();
+          sessionId = sessionState.session_id;
+          localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+        }
+
+        if (cancelled) return;
+        setSession(sessionState);
+        setActiveStep(0);
+      } catch (initialError) {
+        logger.error("Initialisation failed", initialError);
+        if (!cancelled) {
+          setError("初期化に失敗しました。バックエンドが起動しているか確認してください。");
+        }
+      } finally {
+        if (!cancelled) {
+          setInitialising(false);
+        }
+      }
+    };
+
+    void initialise();
+
     return () => {
-      active = false;
+      cancelled = true;
     };
   }, []);
 
-  const stepLabels = useMemo(
-    () => [
-      "要件入力",
-      "進捗ダッシュボード",
-      lastUseMock ? "モックプレビュー" : "エージェント設計",
-      "テンプレート生成",
-      "バックエンド設定",
-      "テスト・パッケージ",
-      "成果物ダウンロード"
-    ],
-    [lastUseMock]
-  );
+  useEffect(() => {
+    if (!workflow || !session) return;
+    const steps = workflow.ui?.steps ?? [];
+    let highestUnlocked = 0;
+    steps.forEach((step, index) => {
+      if (isStepUnlocked(step, session)) {
+        highestUnlocked = index;
+      }
+    });
+    setActiveStep((prev) => Math.min(Math.max(prev, highestUnlocked), Math.max(steps.length - 1, 0)));
+  }, [workflow, session]);
 
-  const { status, loading: pollingLoading, error: pollingError, refresh, stop } = useJobPolling(jobId);
-  const { html, loading: previewLoading, error: previewError } = usePreview(specId);
+  const handleFileUpload = async (component: UIComponent) => {
+    if (!session) return;
+    const stepId = component.props.pipeline_step as string | undefined;
+    if (!stepId) {
+      setError("ファイルアップロード用のpipeline_stepが未設定です。");
+      return;
+    }
+    const inputElement = document.createElement("input");
+    inputElement.type = "file";
+    if (Array.isArray(component.props.accept)) {
+      inputElement.accept = (component.props.accept as string[]).join(",");
+    }
 
-  const handleSubmit = async (payload: GenerationRequest) => {
-    setSubmitLoading(true);
-    setSubmitError(null);
+    inputElement.onchange = async () => {
+      const files = inputElement.files;
+      if (!files || files.length === 0) return;
+      const file = files[0];
+      setUploading((prev) => ({ ...prev, [stepId]: true }));
+      setError(null);
+      try {
+        const updated = await uploadWorkflowInput(session.session_id, stepId, file);
+        setSession(updated);
+        logger.info("Uploaded file for step %s", stepId);
+      } catch (uploadError) {
+        logger.error("Failed to upload file", uploadError);
+        setError("ファイルのアップロードに失敗しました。");
+      } finally {
+        setUploading((prev) => ({ ...prev, [stepId]: false }));
+      }
+    };
+
+    inputElement.click();
+  };
+
+  const handleExecute = async (component: UIComponent) => {
+    if (!session) return;
+    setError(null);
+    setActionLoading(true);
     try {
-      const response = await createGenerationJob(payload);
-      const effectiveUseMock = payload.use_mock ?? features?.agents.use_mock ?? true;
-      setJobId(response.job_id);
-      setLastUseMock(effectiveUseMock);
-      setSpecId(effectiveUseMock ? payload.mock_spec_id : null);
-      setActiveStep(1);
-      setPreviewApproved(!effectiveUseMock);
-      logger.info("Generation job created", response.job_id);
-    } catch (error) {
-      setSubmitError("ジョブの作成に失敗しました。バックエンドが起動しているか確認してください。");
-      logger.error("Failed to create generation job", error);
+      const updated = await executeWorkflow(session.session_id);
+      setSession(updated);
+      const nextStepId = component.props.next_step as string | undefined;
+      if (nextStepId && workflow?.ui?.steps) {
+        const nextIndex = workflow.ui.steps.findIndex((step) => step.id === nextStepId);
+        if (nextIndex >= 0) {
+          setActiveStep(nextIndex);
+        }
+      }
+      logger.info("Pipeline executed successfully");
+    } catch (execError) {
+      logger.error("Pipeline execution failed", execError);
+      setError("ワークフローの実行に失敗しました。入力内容を確認してください。");
     } finally {
-      setSubmitLoading(false);
+      setActionLoading(false);
     }
   };
 
-  const handleApprovePreview = () => {
-    setPreviewApproved(true);
-    setActiveStep((prev) => Math.max(prev, 3));
-    logger.info("Preview approved, proceeding to build steps");
+  const steps = useMemo(() => workflow?.ui?.steps ?? [], [workflow]);
+  const currentStep = steps[activeStep];
+
+  const handleResetSession = async () => {
+    setActionLoading(true);
+    setError(null);
+    try {
+      const newSession = await createWorkflowSession();
+      localStorage.setItem(SESSION_STORAGE_KEY, newSession.session_id);
+      setSession(newSession);
+      setUploading({});
+      setActiveStep(0);
+      logger.info("Created new workflow session");
+    } catch (resetError) {
+      logger.error("Failed to create new session", resetError);
+      setError("新しいセッションの作成に失敗しました。");
+    } finally {
+      setActionLoading(false);
+    }
   };
 
-  const handleRejectPreview = () => {
-    stop();
-    setJobId(null);
-    setSpecId(null);
-    setActiveStep(0);
-    logger.warn("Preview rejected by user; returning to requirements");
-  };
-
-  const handleRestart = () => {
-    stop();
-    setJobId(null);
-    setSpecId(null);
-    const defaultUseMock = features?.agents.use_mock ?? true;
-    setLastUseMock(defaultUseMock);
-    setPreviewApproved(!defaultUseMock);
-    setActiveStep(0);
-    setSubmitError(null);
-    logger.info("Wizard restarted");
-  };
-
-  const errorMessage = useMemo(() => {
-    if (submitError) return submitError;
-    if (pollingError) return pollingError;
-    if (status?.status === "failed") {
-      const failingStep = status.steps.find((step) => step.status === "failed");
-      return failingStep?.message ?? "バックエンドでエラーが発生しました。";
-    }
-    return null;
-  }, [submitError, pollingError, status]);
-
-  const errorDetails = useMemo(() => {
-    if (status?.status !== "failed") return null;
-    const failingStep = status.steps.find((step) => step.status === "failed");
-    return failingStep?.logs ?? null;
-  }, [status]);
-
-  const templateSteps = filterSteps(status, ["template_generation"]);
-  const backendSteps = filterSteps(status, ["backend_setup"]);
-  const packagingSteps = filterSteps(status, ["testing", "packaging"]);
-
-  const canShowPreview = Boolean(status);
-
-  useEffect(() => {
-    if (!jobId) return;
-    setActiveStep((prev) => (prev < 1 ? 1 : prev));
-  }, [jobId]);
-
-  useEffect(() => {
-    if (!status) return;
-    if (status.status === "failed") return;
-
-    if (previewApproved) {
-      setActiveStep((prev) => Math.max(prev, 3));
-    }
-
-    if (status.status === "templates_rendering" && previewApproved) {
-      setActiveStep((prev) => Math.max(prev, 3));
-    }
-
-    if (status.status === "packaging") {
-      setActiveStep((prev) => Math.max(prev, 5));
-      logger.info("Packaging in progress", status.job_id);
-    }
-
-    if (status.status === "completed") {
-      setActiveStep((prev) => Math.max(prev, 6));
-      logger.info("Generation completed", status.job_id);
-    }
-  }, [status, previewApproved]);
-
-  return (
-    <Box sx={{ py: 6, bgcolor: "#f5f7fb", minHeight: "100vh" }}>
-      <Container maxWidth="lg">
-        <Stack spacing={3}>
-          <Box>
-            <Typography variant="h4" fontWeight={700} gutterBottom>
-              モック生成ウィザード
-            </Typography>
-            <Typography variant="subtitle1" color="text.secondary">
-              Phase 1 (MVP) の要件に基づき、モック仕様からテンプレートベースの成果物を生成します。
-            </Typography>
-          </Box>
-
-          <Paper variant="outlined">
-            <Tabs
-              value={activeStep}
-              onChange={(_, value) => canNavigateToStep(value, { jobId, status, previewApproved }) && setActiveStep(value)}
-              variant="scrollable"
-              scrollButtons="auto"
-            >
-              {stepLabels.map((label, index) => (
-                <Tab key={label} label={`${index + 1}. ${label}`} />
-              ))}
-            </Tabs>
-          </Paper>
-
-          {errorMessage && <ErrorBanner message={errorMessage} details={errorDetails ?? undefined} onRetry={refresh} />}
-
-          {activeStep === 0 && (
-            <Paper variant="outlined" sx={{ p: 4 }}>
-              <StepRequirements onSubmit={handleSubmit} loading={submitLoading} error={submitError} features={features} />
-            </Paper>
-          )}
-
-          {activeStep === 1 && (
-            <StepProgress status={status ?? null} loading={pollingLoading} />
-          )}
-
-          {activeStep === 2 && (
-            lastUseMock ? (
-              canShowPreview && (
-                <StepPreview
-                  html={html}
-                  loading={previewLoading}
-                  error={previewError}
-                  onApprove={handleApprovePreview}
-                  onReject={handleRejectPreview}
-                />
-              )
-            ) : (
-              <Paper variant="outlined" sx={{ p: 4 }}>
-                <Typography variant="h6" gutterBottom>
-                  エージェント設計プレビュー
-                </Typography>
-                <Typography color="text.secondary">
-                  LLMモードではプレビューはありません。進捗ダッシュボードで各エージェントのステータスを確認してください。
-                </Typography>
-              </Paper>
-            )
-          )}
-
-          {activeStep === 3 && (
-            <StepLogs title="テンプレート生成" steps={templateSteps} />
-          )}
-
-          {activeStep === 4 && (
-            <StepLogs title="バックエンド構築" steps={backendSteps} />
-          )}
-
-          {activeStep === 5 && (
-            <StepLogs title="テスト・パッケージング" steps={packagingSteps} />
-          )}
-
-          {activeStep === 6 && <StepDownload status={status ?? null} onRestart={handleRestart} />}
-
-          <Paper variant="outlined" sx={{ p: 3 }}>
-            <Typography variant="subtitle2" gutterBottom>
-              現在のジョブ ID
-            </Typography>
-            <Typography color="text.secondary">{jobId ?? "未生成"}</Typography>
-          </Paper>
+  if (initialising) {
+    return (
+      <Container maxWidth="md" sx={{ py: 8 }}>
+        <Stack spacing={3} alignItems="center">
+          <CircularProgress />
+          <Typography>起動中です...</Typography>
         </Stack>
       </Container>
-    </Box>
+    );
+  }
+
+  if (!workflow || !session) {
+    return (
+      <Container maxWidth="md" sx={{ py: 8 }}>
+        <Alert severity="error">設定の読み込みに失敗しました。リロードしてください。</Alert>
+      </Container>
+    );
+  }
+
+  return (
+    <Container maxWidth="md" sx={{ py: 6 }}>
+      <Stack spacing={4}>
+        <Box>
+          <Typography variant="h4" gutterBottom>
+            {workflow.info.name}
+          </Typography>
+          <Typography color="text.secondary">{workflow.info.description}</Typography>
+          <Button sx={{ mt: 2 }} variant="outlined" onClick={handleResetSession} disabled={actionLoading}>
+            {actionLoading ? "再生成中..." : "新しいセッションを開始"}
+          </Button>
+        </Box>
+
+        {error && <Alert severity="error">{error}</Alert>}
+
+        <Paper elevation={2} sx={{ p: 3 }}>
+          <Stepper activeStep={activeStep} alternativeLabel>
+            {steps.map((step, index) => {
+              const unlocked = isStepUnlocked(step, session);
+              return (
+                <Step key={step.id} completed={isStepCompleted(step, session)}>
+                  <StepLabel
+                    onClick={() => {
+                      if (unlocked) {
+                        setActiveStep(index);
+                      }
+                    }}
+                    sx={{ cursor: unlocked ? "pointer" : "default" }}
+                  >
+                    {step.title}
+                  </StepLabel>
+                </Step>
+              );
+            })}
+          </Stepper>
+        </Paper>
+
+        {currentStep ? (
+          <Paper elevation={3} sx={{ p: 4 }}>
+            <Stack spacing={3}>
+              <Box>
+                <Typography variant="h5" gutterBottom>
+                  {currentStep.title}
+                </Typography>
+                {currentStep.description && (
+                  <Typography color="text.secondary">{currentStep.description}</Typography>
+                )}
+              </Box>
+
+              {currentStep.components.map((component) => (
+                <Box key={component.id}>{renderComponent(component, session, handleFileUpload, handleExecute, uploading, actionLoading)}</Box>
+              ))}
+            </Stack>
+          </Paper>
+        ) : (
+          <Paper elevation={3} sx={{ p: 4 }}>
+            <Typography>利用可能なステップが定義されていません。</Typography>
+          </Paper>
+        )}
+      </Stack>
+    </Container>
   );
 }
 
-function filterSteps(status: GenerationStatus | null | undefined, ids: string[]): JobStep[] {
-  if (!status) {
-    return ids.map(
-      (id) => ({ id, label: STEP_NAME_MAP[id] ?? id, status: "pending" } as JobStep)
+function isStepUnlocked(step: UIStep, session: SessionState) {
+  const requirements = (step.props?.required_steps as string[] | undefined) ?? [];
+  if (requirements.length === 0) return true;
+  return requirements.every((requirement) => session.steps[requirement]?.status === "completed");
+}
+
+function isStepCompleted(step: UIStep, session: SessionState) {
+  const requirements = (step.props?.required_steps as string[] | undefined) ?? [];
+  if (requirements.length === 0) return false;
+  return requirements.every((requirement) => session.steps[requirement]?.status === "completed");
+}
+
+function renderComponent(
+  component: UIComponent,
+  session: SessionState,
+  onUpload: (component: UIComponent) => void,
+  onExecute: (component: UIComponent) => void,
+  uploading: Record<string, boolean>,
+  actionLoading: boolean
+) {
+  const props = component.props as Record<string, unknown>;
+  switch (component.type) {
+    case "file_upload": {
+      const pipelineStep = props.pipeline_step as string | undefined;
+      const state = pipelineStep ? session.steps[pipelineStep] : undefined;
+      const isUploading = pipelineStep ? uploading[pipelineStep] : false;
+      const label = typeof props.label === "string" ? props.label : "ファイルをアップロード";
+      const description = typeof props.description === "string" ? props.description : undefined;
+      const uploadedInfo =
+        state?.output && typeof state.output === "object" && state.output !== null
+          ? (state.output as Record<string, unknown>)
+          : null;
+      return (
+        <Stack spacing={1}>
+          <Typography>{label}</Typography>
+          {description && (
+            <Typography color="text.secondary" variant="body2">
+              {description}
+            </Typography>
+          )}
+          <Button variant="contained" onClick={() => onUpload(component)} disabled={isUploading}>
+            {isUploading ? "アップロード中..." : "ファイルを選択"}
+          </Button>
+          {uploadedInfo && (
+            <Typography variant="body2" color="text.secondary">
+              {typeof uploadedInfo.filename === "string" ? uploadedInfo.filename : "ファイル"} をアップロード済み
+            </Typography>
+          )}
+        </Stack>
+      );
+    }
+    case "button": {
+      const action = props.action as string | undefined;
+      const label = typeof props.label === "string" ? props.label : "実行";
+      return (
+        <Button
+          variant="contained"
+          onClick={() => onExecute(component)}
+          disabled={actionLoading || action !== "execute_pipeline"}
+        >
+          {actionLoading ? "実行中..." : label}
+        </Button>
+      );
+    }
+    case "table": {
+      const rows = resolvePath(session, props.data_path as string | undefined);
+      const columns = (props.columns as { key: string; label: string }[] | undefined) ?? [];
+      if (!Array.isArray(rows) || rows.length === 0) {
+        return <Alert severity="info">表示できるデータがまだありません。</Alert>;
+      }
+      return (
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              {columns.map((column) => (
+                <TableCell key={column.key}>{column.label}</TableCell>
+              ))}
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {rows.map((row, index) => (
+              <TableRow key={index}>
+                {columns.map((column) => (
+                  <TableCell key={column.key}>{formatCellValue((row as Record<string, unknown>)[column.key])}</TableCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      );
+    }
+    case "alert": {
+      const severity = (props.severity as "error" | "warning" | "info" | "success") ?? "info";
+      const title = typeof props.title === "string" ? props.title : "";
+      const bodyValue = resolvePath(session, props.body_path as string | undefined);
+      return (
+        <Alert severity={severity}>
+          {title && <Typography fontWeight="bold">{title}</Typography>}
+          {renderAlertBody(bodyValue)}
+        </Alert>
+      );
+    }
+    default:
+      return <Alert severity="warning">未対応のコンポーネント: {component.type}</Alert>;
+  }
+}
+
+function renderAlertBody(value: unknown) {
+  if (value == null) {
+    return <Typography variant="body2">データが未取得です。</Typography>;
+  }
+  if (typeof value === "object") {
+    return (
+      <Stack spacing={0.5} mt={1}>
+        {Object.entries(value as Record<string, unknown>).map(([key, val]) => (
+          <Typography variant="body2" key={key}>
+            {key}: {String(val)}
+          </Typography>
+        ))}
+      </Stack>
     );
   }
-  return status.steps.filter((step) => ids.includes(step.id));
+  return <Typography variant="body2">{String(value)}</Typography>;
 }
 
-function canNavigateToStep(
-  step: number,
-  context: { jobId: string | null; status: GenerationStatus | null | undefined; previewApproved: boolean }
-) {
-  const { jobId, status, previewApproved } = context;
-  if (step === 0) return true;
-  if (!jobId) return false;
-  if (step === 1) return true;
-  if (step === 2) return Boolean(status);
-  if (step >= 3 && step <= 5) {
-    if (!status) return false;
-    if (!previewApproved) return false;
-    return true;
-  }
-  if (step === 6) {
-    return status?.status === "completed";
-  }
-  return false;
+function formatCellValue(value: unknown) {
+  if (value == null) return "";
+  if (typeof value === "number") return value.toLocaleString();
+  return String(value);
 }
-

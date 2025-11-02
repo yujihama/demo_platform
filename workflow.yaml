@@ -1,0 +1,91 @@
+info:
+  name: 請求書検証デモ
+  description: アップロードされた請求書CSVを検証し、結果を一覧表示するデモアプリケーションです。
+  version: 1.0.0
+
+workflows:
+  invoice_validator:
+    provider: mock
+    endpoint: http://dify-mock:8001/api/v1/workflows/invoice-validator/run
+
+ui:
+  layout: wizard
+  steps:
+    - id: upload
+      title: 請求書アップロード
+      description: CSVファイルをアップロードして検証を開始します。
+      props:
+        required_steps: []
+      components:
+        - type: file_upload
+          id: invoice_file
+          props:
+            label: 請求書CSVを選択
+            description: invoice_number,amount,vendor列を含むUTF-8 CSVをアップロードしてください。
+            accept:
+              - .csv
+            pipeline_step: upload_invoice
+        - type: button
+          id: execute_validation
+          props:
+            label: 検証を実行
+            action: execute_pipeline
+            next_step: results
+    - id: results
+      title: 検証結果
+      description: 検証後の結果一覧とサマリーを表示します。
+      props:
+        required_steps:
+          - format_results
+      components:
+        - type: alert
+          id: summary
+          props:
+            severity: info
+            title: 検証サマリー
+            body_path: data.invoice_validation.summary
+        - type: table
+          id: result_table
+          props:
+            title: 検証結果
+            data_path: data.validation_rows
+            columns:
+              - key: invoice_number
+                label: 請求書番号
+              - key: vendor
+                label: 取引先
+              - key: amount
+                label: 金額
+              - key: status
+                label: ステータス
+              - key: notes
+                label: メモ
+
+pipeline:
+  steps:
+    - id: upload_invoice
+      component: file_uploader
+      params:
+        input_key: invoice_file
+        accept:
+          - .csv
+        max_size_mb: 5
+    - id: call_invoice_validator
+      component: call_workflow
+      params:
+        workflow: invoice_validator
+        input_mapping:
+          file_name: inputs.invoice_file.filename
+          file_content_b64: inputs.invoice_file.content_b64
+        output_key: invoice_validation
+    - id: format_results
+      component: for_each
+      params:
+        source: data.invoice_validation.items
+        target: data.validation_rows
+        map:
+          invoice_number: item.invoice_number
+          vendor: item.vendor
+          amount: item.amount
+          status: item.status
+          notes: item.notes
