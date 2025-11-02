@@ -17,6 +17,7 @@ export function useConversation(pollIntervalMs = 2000): UseConversationResult {
   const [workflow, setWorkflow] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [workflowFetchAttempted, setWorkflowFetchAttempted] = useState(false);
 
   const sessionId = useMemo(() => session?.session_id ?? null, [session?.session_id]);
 
@@ -27,6 +28,7 @@ export function useConversation(pollIntervalMs = 2000): UseConversationResult {
       const created = await startConversation(payload);
       setSession(created);
       setWorkflow(null);
+      setWorkflowFetchAttempted(false);
     } catch (err) {
       console.error("Failed to start conversation", err);
       setError("会話の開始に失敗しました");
@@ -42,7 +44,10 @@ export function useConversation(pollIntervalMs = 2000): UseConversationResult {
       const updated = await fetchConversation(sessionId);
       setSession(updated);
       setError(null);
-      if (updated.workflow_ready) {
+      if (!updated.workflow_ready) {
+        setWorkflowFetchAttempted(false);
+      }
+      if (updated.workflow_ready && !workflow) {
         try {
           const yaml = await fetchWorkflowYaml(sessionId);
           setWorkflow(yaml);
@@ -55,15 +60,19 @@ export function useConversation(pollIntervalMs = 2000): UseConversationResult {
       console.error("Failed to fetch conversation", err);
       setError("会話情報の取得に失敗しました");
     }
+  }, [sessionId, workflow]);
+
+  useEffect(() => {
+    setWorkflowFetchAttempted(false);
   }, [sessionId]);
 
   useEffect(() => {
     if (!sessionId) return;
     if (!session) return;
 
-    if (session.workflow_ready && !workflow) {
+    if (session.workflow_ready && !workflow && !workflowFetchAttempted) {
+      setWorkflowFetchAttempted(true);
       void refresh();
-      return;
     }
 
     const terminalStatuses: Array<ConversationSession["status"]> = ["completed", "failed"];
@@ -76,12 +85,13 @@ export function useConversation(pollIntervalMs = 2000): UseConversationResult {
     }, pollIntervalMs);
 
     return () => clearInterval(timer);
-  }, [sessionId, session, workflow, refresh, pollIntervalMs]);
+  }, [sessionId, session, workflow, refresh, pollIntervalMs, workflowFetchAttempted]);
 
   const reset = useCallback(() => {
     setSession(null);
     setWorkflow(null);
     setError(null);
+    setWorkflowFetchAttempted(false);
   }, []);
 
   return {
