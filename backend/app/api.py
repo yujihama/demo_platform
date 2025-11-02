@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from .config import config_manager
 from .models.generation import GenerationRequest, GenerationResponse, GenerationStatusResponse
 from .services.jobs import job_registry
+from .runtime.api import router as runtime_router
 from .services.pipeline import GenerationPipeline, pipeline
 from .services.preview import MockPreviewService
 
@@ -22,6 +23,7 @@ preview_service = MockPreviewService(Path("mock/previews"))
 
 
 router = APIRouter(prefix="/api", tags=["generation"])
+router.include_router(runtime_router)
 
 
 @router.post("/generate", response_model=GenerationResponse)
