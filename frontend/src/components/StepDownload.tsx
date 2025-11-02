@@ -4,9 +4,10 @@ import type { GenerationStatus } from "../types";
 type Props = {
   status: GenerationStatus | null;
   onRestart: () => void;
+  showMetadata?: boolean;
 };
 
-export function StepDownload({ status, onRestart }: Props) {
+export function StepDownload({ status, onRestart, showMetadata = true }: Props) {
   const downloadUrl = status?.download_url ?? "";
 
   return (
@@ -32,7 +33,7 @@ export function StepDownload({ status, onRestart }: Props) {
         <Typography color="text.secondary">成果物の準備が完了するとダウンロードリンクが表示されます。</Typography>
       )}
 
-      {status?.metadata && (
+      {showMetadata && status?.metadata && (
         <Box sx={{ mt: 2 }}>
           <Typography variant="subtitle2">メタデータ</Typography>
           <pre style={{ background: "#f5f7fb", padding: 16, borderRadius: 8 }}>

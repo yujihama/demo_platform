@@ -45,19 +45,22 @@ def test_ui_wizard_llm_mode_happy_path(prepare_environment, page: Page) -> None:
 
     page.get_by_role("button", name="生成を開始").click()
 
-    page.get_by_text("生成進捗").wait_for(timeout=15000)
-    page.get_by_role("tab", name="3. エージェント設計").click()
-    page.get_by_text("LLMモードではプレビューはありません").wait_for(timeout=5000)
+    dashboard = page.get_by_test_id("llm-dashboard")
+    dashboard.wait_for(timeout=15000)
 
-    page.get_by_role("tab", name="7. 成果物ダウンロード").click()
+    yaml_block = page.get_by_test_id("llm-yaml-preview").locator("pre")
+    yaml_block.wait_for(timeout=20000)
+
+    validation_card = page.get_by_test_id("llm-validation-card")
+    validation_card.get_by_text("成功", exact=False).wait_for(timeout=10000)
+
+    analysis_card = page.get_by_test_id("llm-analysis-card")
+    analysis_card.get_by_text("カテゴリ:", exact=False).first.wait_for(timeout=10000)
+
     download_button = page.get_by_role("button", name="ZIP をダウンロード")
     download_button.wait_for(timeout=20000)
     href = download_button.get_attribute("href")
     assert href and href.endswith("/download")
-
-    # Ensure progress included validation step
-    page.get_by_role("tab", name="2. 進捗ダッシュボード").click()
-    page.get_by_text("仕様バリデーション").wait_for(timeout=5000)
 
 
 @pytest.mark.playwright
