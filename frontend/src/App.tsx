@@ -1,341 +1,295 @@
-import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Box,
   Button,
   CircularProgress,
   Container,
+  Divider,
   Paper,
   Stack,
-  Step,
-  StepLabel,
-  Stepper,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableRow,
+  TextField,
   Typography
 } from "@mui/material";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { fetchWorkflowDefinition } from "./api";
-import { useWorkflowSession } from "./hooks/useWorkflowSession";
-import type { UIComponent, UIStep, WorkflowYaml } from "./types";
+import {
+  downloadConversationPackage,
+  fetchConversation,
+  startConversation
+} from "./api";
+import type { ConversationMessage, ConversationSession } from "./types";
 
-function resolvePath(source: Record<string, unknown> | undefined, path: string | undefined) {
-  if (!source || !path) return undefined;
-  const normalizedPath = path.startsWith("view.") ? path.slice("view.".length) : path;
-  const segments = normalizedPath.split(".");
-  let current: unknown = source;
-  for (const segment of segments) {
-    if (typeof current !== "object" || current === null) return undefined;
-    if (!(segment in current)) return undefined;
-    current = (current as Record<string, unknown>)[segment];
+const POLLING_INTERVAL = 2500;
+const DEFAULT_USER_ID = "demo-user";
+const DEFAULT_PROJECT_ID = "invoice-workflow";
+const DEFAULT_PROJECT_NAME = "請求書データ抽出アプリ";
+
+function roleLabel(role: ConversationMessage["role"]): string {
+  switch (role) {
+    case "user":
+      return "ユーザー";
+    case "assistant":
+      return "アシスタント";
+    case "system":
+      return "システム";
+    default:
+      return String(role);
   }
-  return current;
-}
-
-function toBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result;
-      if (typeof result === "string") {
-        const base64 = result.split(",")[1] ?? result;
-        resolve(base64);
-      } else {
-        reject(new Error("ファイルの読み込みに失敗しました"));
-      }
-    };
-    reader.onerror = () => reject(reader.error ?? new Error("ファイルの読み込みに失敗しました"));
-    reader.readAsDataURL(file);
-  });
 }
 
 export default function App() {
-  const [workflow, setWorkflow] = useState<WorkflowYaml | null>(null);
-  const [workflowError, setWorkflowError] = useState<string | null>(null);
-  const [loadingWorkflow, setLoadingWorkflow] = useState(true);
-  const [activeStepIndex, setActiveStepIndex] = useState(0);
-  const [formValues, setFormValues] = useState<Record<string, unknown>>({});
+  const [userId, setUserId] = useState(DEFAULT_USER_ID);
+  const [projectId, setProjectId] = useState(DEFAULT_PROJECT_ID);
+  const [projectName, setProjectName] = useState(DEFAULT_PROJECT_NAME);
+  const [prompt, setPrompt] = useState("");
+  const [session, setSession] = useState<ConversationSession | null>(null);
+  const [workflowPreview, setWorkflowPreview] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [pollingError, setPollingError] = useState<string | null>(null);
 
-  const { session, sessionId, loading: sessionLoading, error: sessionError, initialize, execute } = useWorkflowSession();
+  const isRunning = session?.status === "running";
+  const canDownload = session?.status === "completed" && Boolean(session.workflow_yaml ?? workflowPreview);
 
   useEffect(() => {
+    if (!session || session.status !== "running") {
+      return undefined;
+    }
     let cancelled = false;
-    setLoadingWorkflow(true);
-    fetchWorkflowDefinition()
-      .then((definition) => {
+    let timer: number | undefined;
+
+    const poll = async () => {
+      try {
+        const updated = await fetchConversation(session.session_id);
         if (cancelled) return;
-        setWorkflow(definition);
-        setWorkflowError(null);
-      })
-      .catch((error) => {
-        console.error("Failed to load workflow definition", error);
-        setWorkflowError("workflow.yaml の読み込みに失敗しました。バックエンドを確認してください。");
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoadingWorkflow(false);
+        setSession(updated);
+        setPollingError(null);
+        if (updated.workflow_yaml) {
+          setWorkflowPreview(updated.workflow_yaml);
         }
-      });
+        if (updated.status === "running") {
+          timer = window.setTimeout(poll, POLLING_INTERVAL);
+        }
+      } catch (err) {
+        console.error("Failed to poll conversation", err);
+        if (!cancelled) {
+          setPollingError("対話の更新に失敗しました。ネットワークを確認してください。");
+          timer = window.setTimeout(poll, POLLING_INTERVAL * 2);
+        }
+      }
+    };
+
+    timer = window.setTimeout(poll, POLLING_INTERVAL);
     return () => {
       cancelled = true;
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+      }
     };
+  }, [session?.session_id, session?.status]);
+
+  const handleSubmit = useCallback(async () => {
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedPrompt) {
+      setError("プロンプトを入力してください。");
+      return;
+    }
+    if (!userId.trim() || !projectId.trim() || !projectName.trim()) {
+      setError("ユーザーID、プロジェクトID、プロジェクト名を入力してください。");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const response = await startConversation({
+        user_id: userId.trim(),
+        project_id: projectId.trim(),
+        project_name: projectName.trim(),
+        prompt: trimmedPrompt
+      });
+      setSession(response);
+      setWorkflowPreview(response.workflow_yaml ?? null);
+      setError(null);
+      setPrompt("");
+    } catch (err) {
+      console.error("Failed to start conversation", err);
+      setError("LLMとの対話を開始できませんでした。サーバーの状態を確認してください。");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [prompt, userId, projectId, projectName]);
+
+  const handleReset = useCallback(() => {
+    setSession(null);
+    setWorkflowPreview(null);
+    setError(null);
+    setPollingError(null);
+    setPrompt("");
   }, []);
 
-  useEffect(() => {
-    if (!workflow) return;
-    void initialize();
-  }, [workflow, initialize]);
-
-  const steps = useMemo(() => workflow?.ui?.steps ?? [], [workflow]);
-  const activeStep = steps[activeStepIndex];
-
-  useEffect(() => {
+  const handleDownload = useCallback(async () => {
     if (!session) return;
-    setFormValues({});
-    setActiveStepIndex(0);
-  }, [session?.session_id]);
-
-  const handleFileChange = async (componentId: string, fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0) {
-      setFormValues((prev) => {
-        const next = { ...prev };
-        delete next[componentId];
-        return next;
-      });
-      return;
-    }
-    const file = fileList[0];
-    const content = await toBase64(file);
-    setFormValues((prev) => ({
-      ...prev,
-      [componentId]: {
-        name: file.name,
-        content_type: file.type,
-        content
-      }
-    }));
-  };
-
-  const handleSubmitStep = async (step: UIStep) => {
-    if (!sessionId) {
-      console.warn("Session not ready");
-      return;
-    }
-    const inputs: Record<string, unknown> = {};
-    step.components.forEach((component) => {
-      if (formValues[component.id] !== undefined) {
-        inputs[component.id] = formValues[component.id];
-      }
-    });
+    setIsDownloading(true);
     try {
-      const result = await execute({ step_id: step.id, inputs });
-      if (result) {
-        const nextIndex = Math.min(activeStepIndex + 1, Math.max(steps.length - 1, 0));
-        setActiveStepIndex(nextIndex);
-      }
-    } catch (error) {
-      console.error("Failed to execute workflow", error);
+      const blob = await downloadConversationPackage(session.session_id);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${projectId || "app"}.zip`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to download package", err);
+      setError("成果物のダウンロードに失敗しました。");
+    } finally {
+      setIsDownloading(false);
     }
-  };
+  }, [session, projectId]);
 
-  const renderComponent = (component: UIComponent) => {
-    const props = component.props ?? {};
-    switch (component.type) {
-      case "file_upload": {
-        const accept = Array.isArray(props.accept) ? props.accept.join(",") : undefined;
-        return (
-          <Stack spacing={1} key={component.id}>
-            {props.label && (
-              <Typography variant="subtitle1" fontWeight={600}>
-                {String(props.label)}
-              </Typography>
-            )}
-            <Button variant="outlined" component="label">
-              ファイルを選択
-              <input
-                type="file"
-                hidden
-                accept={accept}
-                onChange={(event) => void handleFileChange(component.id, event.target.files)}
-              />
-            </Button>
-            {formValues[component.id] && typeof formValues[component.id] === "object" && (
-              <Typography variant="body2" color="text.secondary">
-                {(formValues[component.id] as { name?: string }).name ?? "ファイルが選択されました"}
-              </Typography>
-            )}
-          </Stack>
-        );
-      }
-      case "button": {
-        const action = props.action ?? "submit";
-        const label = typeof props.label === "string" ? props.label : "実行";
-        return (
-          <Button
-            key={component.id}
-            variant="contained"
-            size="large"
-            disabled={sessionLoading}
-            onClick={() => {
-              if (action === "submit" && activeStep) {
-                void handleSubmitStep(activeStep);
-              }
-            }}
-          >
-            {sessionLoading ? <CircularProgress size={20} color="inherit" /> : label}
-          </Button>
-        );
-      }
-      case "alert": {
-        const severity = typeof props.severity === "string" ? (props.severity as any) : "info";
-        const message = typeof props.message === "string" ? props.message : "";
-        return (
-          <Alert key={component.id} severity={severity} sx={{ whiteSpace: "pre-wrap" }}>
-            {message}
-          </Alert>
-        );
-      }
-      case "table": {
-        const dataPath = typeof props.data_path === "string" ? props.data_path : undefined;
-        const resolved = resolvePath(session?.view as Record<string, unknown>, dataPath);
-        const rows = Array.isArray(resolved)
-          ? (resolved as Array<Record<string, unknown>>)
-          : [];
-        const columns = Array.isArray(props.columns) ? (props.columns as Array<Record<string, unknown>>) : [];
-        return (
-          <Box key={component.id}>
-            {props.title && (
-              <Typography variant="h6" gutterBottom>
-                {String(props.title)}
-              </Typography>
-            )}
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  {columns.map((column) => (
-                    <TableCell key={String(column.field)}>{String(column.label ?? column.field)}</TableCell>
-                  ))}
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {rows.map((row, rowIndex) => (
-                  <TableRow key={`${component.id}-${rowIndex}`}>
-                    {columns.map((column) => (
-                      <TableCell key={String(column.field)}>
-                        {String(row[column.field as string] ?? "-")}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </Box>
-        );
-      }
-      default:
-        return (
-          <Alert key={component.id} severity="warning">
-            未対応のコンポーネントタイプ: {component.type}
-          </Alert>
-        );
-    }
-  };
-
-  const header = (
-    <Stack spacing={1}>
-      <Typography variant="h4" fontWeight={700}>
-        {workflow?.info.name ?? "ワークフローデモ"}
-      </Typography>
-      {workflow?.info.description && (
-        <Typography variant="subtitle1" color="text.secondary">
-          {workflow.info.description}
-        </Typography>
-      )}
-    </Stack>
-  );
-
-  if (loadingWorkflow) {
-    return (
-      <Box sx={{ display: "flex", minHeight: "100vh", alignItems: "center", justifyContent: "center" }}>
-        <CircularProgress />
-      </Box>
-    );
-  }
-
-  if (workflowError) {
-    return (
-      <Box sx={{ py: 6, bgcolor: "#f5f7fb", minHeight: "100vh" }}>
-        <Container maxWidth="md">
-          <Stack spacing={3}>
-            {header}
-            <Alert severity="error">{workflowError}</Alert>
-          </Stack>
-        </Container>
-      </Box>
-    );
-  }
+  const conversationMessages = useMemo(() => session?.messages ?? [], [session]);
 
   return (
-    <Box sx={{ py: 6, bgcolor: "#f5f7fb", minHeight: "100vh" }}>
-      <Container maxWidth="md">
-        <Stack spacing={3}>
-          {header}
-          {sessionError && <Alert severity="error">{sessionError}</Alert>}
-          {session?.error && <Alert severity="error">{session.error}</Alert>}
+    <Container maxWidth="lg" sx={{ py: 6 }}>
+      <Stack spacing={4}>
+        <Box>
+          <Typography variant="h4" fontWeight={700} gutterBottom>
+            宣言的アプリ生成コンソール
+          </Typography>
+          <Typography variant="body1" color="text.secondary">
+            自然言語で要件を入力すると、LLMが workflow.yaml を生成し、Docker パッケージとしてダウンロードできます。
+          </Typography>
+        </Box>
 
-          {steps.length > 0 && (
-            <Paper variant="outlined" sx={{ p: 3 }}>
-              <Stepper activeStep={activeStepIndex} alternativeLabel>
-                {steps.map((step) => (
-                  <Step key={step.id}>
-                    <StepLabel>{step.title}</StepLabel>
-                  </Step>
-                ))}
-              </Stepper>
-            </Paper>
-          )}
+        <Paper elevation={2} sx={{ p: 3 }}>
+          <Stack spacing={2}>
+            <Typography variant="h6" fontWeight={600}>
+              プロジェクト情報
+            </Typography>
+            <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
+              <TextField
+                label="ユーザーID"
+                value={userId}
+                onChange={(event) => setUserId(event.target.value)}
+                fullWidth
+              />
+              <TextField
+                label="プロジェクトID"
+                value={projectId}
+                onChange={(event) => setProjectId(event.target.value)}
+                fullWidth
+              />
+              <TextField
+                label="プロジェクト名"
+                value={projectName}
+                onChange={(event) => setProjectName(event.target.value)}
+                fullWidth
+              />
+            </Stack>
+            <TextField
+              label="生成したいアプリの要件"
+              placeholder="例: 請求書のPDFから金額と取引先を抽出してスプレッドシートにまとめてください"
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              multiline
+              minRows={3}
+              disabled={isRunning}
+            />
+            <Stack direction="row" spacing={2}>
+              <Button
+                variant="contained"
+                onClick={handleSubmit}
+                disabled={isSubmitting || isRunning}
+              >
+                {isSubmitting ? <CircularProgress size={20} color="inherit" /> : "LLMに依頼"}
+              </Button>
+              <Button variant="outlined" color="inherit" onClick={handleReset} disabled={!session}>
+                リセット
+              </Button>
+            </Stack>
+            {error && <Alert severity="error">{error}</Alert>}
+            {pollingError && <Alert severity="warning">{pollingError}</Alert>}
+          </Stack>
+        </Paper>
 
-          {activeStep ? (
-            <Paper variant="outlined" sx={{ p: 4 }}>
-              <Stack spacing={3}>
-                <Box>
-                  <Typography variant="h5" fontWeight={600} gutterBottom>
-                    {activeStep.title}
-                  </Typography>
-                  {activeStep.description && (
-                    <Typography variant="body1" color="text.secondary">
-                      {activeStep.description}
-                    </Typography>
-                  )}
-                </Box>
-                <Stack spacing={3}>{activeStep.components.map(renderComponent)}</Stack>
-                {activeStepIndex > 0 && (
-                  <Button variant="outlined" onClick={() => setActiveStepIndex(Math.max(activeStepIndex - 1, 0))}>
-                    戻る
-                  </Button>
-                )}
-              </Stack>
-            </Paper>
-          ) : (
-            <Alert severity="info">workflow.yaml に UI ステップが定義されていません。</Alert>
-          )}
-
-          {session && (
-            <Paper variant="outlined" sx={{ p: 3 }}>
-              <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                セッション情報
+        <Stack direction={{ xs: "column", md: "row" }} spacing={3}>
+          <Paper elevation={2} sx={{ p: 3, flex: 1 }}>
+            <Stack spacing={2}>
+              <Typography variant="h6" fontWeight={600}>
+                LLMとの対話ログ
               </Typography>
-              <Stack spacing={1}>
-                <Typography variant="body2">セッションID: {session.session_id}</Typography>
-                <Typography variant="body2">ステータス: {session.status}</Typography>
-              </Stack>
-            </Paper>
-          )}
+              <Divider />
+              {conversationMessages.length === 0 ? (
+                <Typography color="text.secondary">
+                  ここに対話の流れが表示されます。まずは要件を入力してください。
+                </Typography>
+              ) : (
+                <Stack spacing={2}>
+                  {conversationMessages.map((message, index) => (
+                    <Box key={`${message.created_at}-${index}`}>
+                      <Typography variant="subtitle2" color="text.secondary">
+                        {roleLabel(message.role)}
+                      </Typography>
+                      <Paper variant="outlined" sx={{ p: 2, mt: 0.5 }}>
+                        <Typography variant="body1" sx={{ whiteSpace: "pre-wrap" }}>
+                          {message.content}
+                        </Typography>
+                      </Paper>
+                    </Box>
+                  ))}
+                  {isRunning && (
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <CircularProgress size={16} />
+                      <Typography variant="body2" color="text.secondary">
+                        workflow.yaml を生成しています...
+                      </Typography>
+                    </Stack>
+                  )}
+                </Stack>
+              )}
+            </Stack>
+          </Paper>
+
+          <Paper elevation={2} sx={{ p: 3, flex: 1 }}>
+            <Stack spacing={2} sx={{ height: "100%" }}>
+              <Typography variant="h6" fontWeight={600}>
+                workflow.yaml プレビュー
+              </Typography>
+              <Divider />
+              {workflowPreview ? (
+                <Box
+                  component="pre"
+                  sx={{
+                    bgcolor: "grey.900",
+                    color: "grey.100",
+                    p: 2,
+                    borderRadius: 1,
+                    fontFamily: "monospace",
+                    overflow: "auto",
+                    flex: 1,
+                    maxHeight: 360
+                  }}
+                >
+                  {workflowPreview}
+                </Box>
+              ) : (
+                <Typography color="text.secondary">
+                  生成が完了すると、ここに workflow.yaml の内容が表示されます。
+                </Typography>
+              )}
+              <Button
+                variant="contained"
+                color="secondary"
+                disabled={!canDownload || isDownloading}
+                onClick={() => void handleDownload()}
+              >
+                {isDownloading ? <CircularProgress size={20} color="inherit" /> : "Dockerパッケージをダウンロード"}
+              </Button>
+            </Stack>
+          </Paper>
         </Stack>
-      </Container>
-    </Box>
+      </Stack>
+    </Container>
   );
 }
+

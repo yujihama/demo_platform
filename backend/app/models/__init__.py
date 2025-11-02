@@ -10,6 +10,12 @@ from .generation import (
     JobStep,
     StepStatus,
 )
+from .conversation import (
+    ConversationCreateRequest,
+    ConversationMessage,
+    ConversationSessionResponse,
+    ConversationStatus,
+)
 
 __all__ = [
     "GenerationJob",
@@ -20,5 +26,9 @@ __all__ = [
     "JobStatus",
     "JobStep",
     "StepStatus",
+    "ConversationCreateRequest",
+    "ConversationMessage",
+    "ConversationSessionResponse",
+    "ConversationStatus",
 ]
 
