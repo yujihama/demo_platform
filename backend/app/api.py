@@ -5,12 +5,19 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 
 from .config import config_manager
+from .models.conversation import (
+    ConversationCreateRequest,
+    ConversationCreateResponse,
+    ConversationStatusResponse,
+)
 from .models.generation import GenerationRequest, GenerationResponse, GenerationStatusResponse
 from .services.jobs import job_registry
 from .services.pipeline import GenerationPipeline, pipeline
+from .services.conversation import conversation_service
+from .services.distribution import distribution_service
 from .services.preview import MockPreviewService
 
 
@@ -68,4 +75,54 @@ async def get_preview(spec_id: str) -> HTMLResponse:
 @router.get("/config/features")
 async def get_features_config() -> dict:
     return config_manager.features.model_dump()
+
+
+@router.post("/generate/conversations", response_model=ConversationCreateResponse)
+async def create_conversation(
+    payload: ConversationCreateRequest,
+) -> ConversationCreateResponse:
+    session = conversation_service.create_session(payload)
+    return ConversationCreateResponse(
+        session_id=session.session_id,
+        status=session.status,
+        messages=session.messages,
+        workflow_ready=session.workflow_path is not None,
+    )
+
+
+@router.get("/generate/conversations/{session_id}", response_model=ConversationStatusResponse)
+async def get_conversation(session_id: str) -> ConversationStatusResponse:
+    session = conversation_service.require_session(session_id)
+    return ConversationStatusResponse(
+        session_id=session.session_id,
+        status=session.status,
+        messages=session.messages,
+        workflow_ready=session.workflow_path is not None,
+        created_at=session.created_at,
+        updated_at=session.updated_at,
+        error=session.error,
+    )
+
+
+@router.get("/generate/conversations/{session_id}/workflow", response_class=PlainTextResponse)
+async def get_conversation_workflow(session_id: str) -> PlainTextResponse:
+    session = conversation_service.require_session(session_id)
+    if session.workflow_path is None:
+        raise HTTPException(status_code=404, detail="workflow.yaml はまだ生成されていません")
+    yaml_text = session.workflow_path.read_text(encoding="utf-8")
+    return PlainTextResponse(content=yaml_text, media_type="text/yaml")
+
+
+@router.post("/generate/conversations/{session_id}/package")
+async def create_package(session_id: str) -> FileResponse:
+    session = conversation_service.require_session(session_id)
+    try:
+        archive_path = distribution_service.build_archive(session)
+    except ValueError as exc:  # noqa: PERF203
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return FileResponse(
+        path=archive_path,
+        filename="workflow-package.zip",
+        media_type="application/zip",
+    )
 

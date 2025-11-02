@@ -8,7 +8,7 @@ from typing import Any, Generic, Type, TypeVar
 
 from langchain_core.exceptions import OutputParserException
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnableSerializable
+from langchain_core.runnables import RunnableLambda, RunnableSerializable
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel, ValidationError
 
@@ -33,7 +33,25 @@ class StructuredLLMAgent(Generic[TOutput]):
     ) -> None:
         self._name = name
         self._retry_policy = retry_policy
-        self._chain: RunnableSerializable[dict[str, Any], TOutput] = prompt | llm.with_structured_output(output_model)
+        structured = llm.with_structured_output(output_model)
+        if not isinstance(structured, RunnableSerializable):
+            structured = self._wrap_runnable(structured)
+
+        self._chain: RunnableSerializable[dict[str, Any], TOutput] = prompt | structured
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _wrap_runnable(candidate: Any) -> RunnableSerializable:
+        if isinstance(candidate, RunnableSerializable):
+            return candidate
+
+        if hasattr(candidate, "invoke") and callable(getattr(candidate, "invoke")):
+            return RunnableLambda(candidate.invoke)
+
+        if callable(candidate):
+            return RunnableLambda(candidate)
+
+        raise TypeError("LLM から返却されたオブジェクトを Runnable に変換できませんでした。")
 
     def invoke(self, **kwargs: Any) -> TOutput:
         attempt = 0

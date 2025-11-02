@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Dict, List
 
+from typing import Any, Dict, List
+
 from pydantic import BaseModel, Field
 
 
@@ -32,7 +34,7 @@ class AppTypeClassificationResult(BaseModel):
 class ComponentPlacement(BaseModel):
     component_id: str
     slot: str
-    props: Dict[str, str] = Field(default_factory=dict)
+    props: Dict[str, Any] = Field(default_factory=dict)
     fulfills: List[str] = Field(default_factory=list)
 
 
