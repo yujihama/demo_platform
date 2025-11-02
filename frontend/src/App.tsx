@@ -7,6 +7,7 @@ import { StepPreview } from "./components/StepPreview";
 import { StepLogs } from "./components/StepLogs";
 import { StepDownload } from "./components/StepDownload";
 import { ErrorBanner } from "./components/ErrorBanner";
+import { LLMGenerationView } from "./components/llm/LLMGenerationView";
 import { createGenerationJob, fetchFeaturesConfig } from "./api";
 import type { FeaturesConfig, GenerationRequest, GenerationStatus, JobStep } from "./types";
 import { useJobPolling } from "./hooks/useJobPolling";
@@ -37,6 +38,7 @@ export default function App() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [previewApproved, setPreviewApproved] = useState(false);
   const [lastUseMock, setLastUseMock] = useState(true);
+  const isLLMFlow = !lastUseMock;
 
   useEffect(() => {
     let active = true;
@@ -102,16 +104,17 @@ export default function App() {
     logger.warn("Preview rejected by user; returning to requirements");
   };
 
-  const handleRestart = () => {
+  const handleRestart = (options?: { keepMode?: boolean }) => {
     stop();
     setJobId(null);
     setSpecId(null);
     const defaultUseMock = features?.agents.use_mock ?? true;
-    setLastUseMock(defaultUseMock);
-    setPreviewApproved(!defaultUseMock);
+    const nextUseMock = options?.keepMode ? lastUseMock : defaultUseMock;
+    setLastUseMock(nextUseMock);
+    setPreviewApproved(!nextUseMock);
     setActiveStep(0);
     setSubmitError(null);
-    logger.info("Wizard restarted");
+    logger.info("Wizard restarted", { keepMode: options?.keepMode });
   };
 
   const errorMessage = useMemo(() => {
@@ -170,74 +173,95 @@ export default function App() {
         <Stack spacing={3}>
           <Box>
             <Typography variant="h4" fontWeight={700} gutterBottom>
-              モック生成ウィザード
+              宣言的アプリ生成スタジオ
             </Typography>
             <Typography variant="subtitle1" color="text.secondary">
-              Phase 1 (MVP) の要件に基づき、モック仕様からテンプレートベースの成果物を生成します。
+              モック仕様と LLM 生成の両モードに対応し、workflow.yaml ベースの成果物を安全に生成できます。
             </Typography>
           </Box>
 
-          <Paper variant="outlined">
-            <Tabs
-              value={activeStep}
-              onChange={(_, value) => canNavigateToStep(value, { jobId, status, previewApproved }) && setActiveStep(value)}
-              variant="scrollable"
-              scrollButtons="auto"
-            >
-              {stepLabels.map((label, index) => (
-                <Tab key={label} label={`${index + 1}. ${label}`} />
-              ))}
-            </Tabs>
-          </Paper>
-
           {errorMessage && <ErrorBanner message={errorMessage} details={errorDetails ?? undefined} onRetry={refresh} />}
 
-          {activeStep === 0 && (
-            <Paper variant="outlined" sx={{ p: 4 }}>
-              <StepRequirements onSubmit={handleSubmit} loading={submitLoading} error={submitError} features={features} />
-            </Paper>
-          )}
-
-          {activeStep === 1 && (
-            <StepProgress status={status ?? null} loading={pollingLoading} />
-          )}
-
-          {activeStep === 2 && (
-            lastUseMock ? (
-              canShowPreview && (
-                <StepPreview
-                  html={html}
-                  loading={previewLoading}
-                  error={previewError}
-                  onApprove={handleApprovePreview}
-                  onReject={handleRejectPreview}
+          {isLLMFlow ? (
+            <>
+              {!jobId && (
+                <Paper variant="outlined" sx={{ p: 4 }}>
+                  <StepRequirements onSubmit={handleSubmit} loading={submitLoading} error={submitError} features={features} />
+                </Paper>
+              )}
+              {jobId && (
+                <LLMGenerationView
+                  status={status ?? null}
+                  loading={pollingLoading}
+                  onRestart={() => handleRestart({ keepMode: true })}
                 />
-              )
-            ) : (
-              <Paper variant="outlined" sx={{ p: 4 }}>
-                <Typography variant="h6" gutterBottom>
-                  エージェント設計プレビュー
-                </Typography>
-                <Typography color="text.secondary">
-                  LLMモードではプレビューはありません。進捗ダッシュボードで各エージェントのステータスを確認してください。
-                </Typography>
+              )}
+            </>
+          ) : (
+            <>
+              <Paper variant="outlined">
+                <Tabs
+                  value={activeStep}
+                  onChange={(_, value) =>
+                    canNavigateToStep(value, { jobId, status, previewApproved }) && setActiveStep(value)
+                  }
+                  variant="scrollable"
+                  scrollButtons="auto"
+                >
+                  {stepLabels.map((label, index) => (
+                    <Tab key={label} label={`${index + 1}. ${label}`} />
+                  ))}
+                </Tabs>
               </Paper>
-            )
-          )}
 
-          {activeStep === 3 && (
-            <StepLogs title="テンプレート生成" steps={templateSteps} />
-          )}
+              {activeStep === 0 && (
+                <Paper variant="outlined" sx={{ p: 4 }}>
+                  <StepRequirements onSubmit={handleSubmit} loading={submitLoading} error={submitError} features={features} />
+                </Paper>
+              )}
 
-          {activeStep === 4 && (
-            <StepLogs title="バックエンド構築" steps={backendSteps} />
-          )}
+              {activeStep === 1 && (
+                <StepProgress status={status ?? null} loading={pollingLoading} />
+              )}
 
-          {activeStep === 5 && (
-            <StepLogs title="テスト・パッケージング" steps={packagingSteps} />
-          )}
+              {activeStep === 2 && (
+                lastUseMock ? (
+                  canShowPreview && (
+                    <StepPreview
+                      html={html}
+                      loading={previewLoading}
+                      error={previewError}
+                      onApprove={handleApprovePreview}
+                      onReject={handleRejectPreview}
+                    />
+                  )
+                ) : (
+                  <Paper variant="outlined" sx={{ p: 4 }}>
+                    <Typography variant="h6" gutterBottom>
+                      エージェント設計プレビュー
+                    </Typography>
+                    <Typography color="text.secondary">
+                      LLMモードではプレビューはありません。進捗ダッシュボードで各エージェントのステータスを確認してください。
+                    </Typography>
+                  </Paper>
+                )
+              )}
 
-          {activeStep === 6 && <StepDownload status={status ?? null} onRestart={handleRestart} />}
+              {activeStep === 3 && (
+                <StepLogs title="テンプレート生成" steps={templateSteps} />
+              )}
+
+              {activeStep === 4 && (
+                <StepLogs title="バックエンド構築" steps={backendSteps} />
+              )}
+
+              {activeStep === 5 && (
+                <StepLogs title="テスト・パッケージング" steps={packagingSteps} />
+              )}
+
+              {activeStep === 6 && <StepDownload status={status ?? null} onRestart={() => handleRestart()} />}
+            </>
+          )}
 
           <Paper variant="outlined" sx={{ p: 3 }}>
             <Typography variant="subtitle2" gutterBottom>
