@@ -47,8 +47,7 @@ jobs:
           pip install pytest pytest-cov
       - name: Run unit tests
         run: |
-          cd backend
-          pytest tests/unit/ -v --cov=app --cov-report=xml
+          pytest tests/unit/ -v --cov=backend.app --cov-report=xml:backend/coverage.xml
       - name: Upload coverage
         uses: codecov/codecov-action@v3
         if: always()
