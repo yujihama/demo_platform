@@ -55,7 +55,7 @@ class MockStructuredChatModel:
     def _invoke(self, output_model: Any, prompt_value: Any) -> Any:  # noqa: ANN401
         name = getattr(output_model, "__name__", "")
         text = self._extract_text(prompt_value)
-        if name == "RequirementsDecompositionResult":
+        if name in {"RequirementsDecompositionResult", "WorkflowAnalysisResult"}:
             return output_model(**self._build_requirements(text))
         if name == "AppTypeClassificationResult":
             return output_model(**self._build_classification())
@@ -65,6 +65,12 @@ class MockStructuredChatModel:
             return output_model(**result)
         if name == "DataFlowDesignResult":
             return output_model(**self._build_data_flow())
+        if name == "WorkflowArchitectureResult":
+            return output_model(**self._build_workflow_architecture())
+        if name == "WorkflowYamlResult":
+            return output_model(workflow_yaml=self._build_workflow_yaml())
+        if name == "WorkflowValidationResult":
+            return output_model(**self._build_workflow_yaml_validation())
         if name == "ValidationResult":
             return output_model(**self._build_validation())
         raise ValueError(f"Unsupported mock structured output model: {name}")
@@ -271,6 +277,166 @@ class MockStructuredChatModel:
             ]
 
         return {"state": state, "flows": flows}
+
+    def _build_workflow_architecture(self) -> Dict[str, Any]:
+        requirements = self._requirements or self._build_requirements(self._last_prompt)
+        workflows_section = {
+            "invoice_processing": {
+                "provider": "mock",
+                "endpoint": "http://mock.dify.local/workflows/invoice-processing",
+            }
+        }
+        ui_structure = {
+            "layout": "wizard",
+            "steps": [
+                {
+                    "id": "upload",
+                    "title": "請求書アップロード",
+                    "description": "請求書ファイルをアップロードして処理を開始します",
+                    "components": [
+                        {
+                            "type": "file_upload",
+                            "id": "invoice_file",
+                            "props": {"label": "請求書ファイル", "binding": "invoice_file"},
+                        }
+                    ],
+                },
+                {
+                    "id": "review",
+                    "title": "結果確認",
+                    "description": "抽出結果と検証状況を確認します",
+                    "components": [
+                        {
+                            "type": "table",
+                            "id": "validation_summary",
+                            "props": {
+                                "binding": "validation_summary",
+                                "title": "検証サマリー",
+                            },
+                        }
+                    ],
+                },
+            ],
+        }
+        pipeline_structure = [
+            {
+                "id": "submit_invoice",
+                "component": "call_workflow",
+                "params": {
+                    "workflow": "invoice_processing",
+                    "input": {
+                        "file_url": "{{ inputs.invoice_file }}",
+                        "metadata": {"prompt": requirements.get("summary", "")},
+                    },
+                },
+            },
+            {
+                "id": "summarise_result",
+                "component": "call_workflow",
+                "params": {
+                    "workflow": "invoice_processing",
+                    "input": {
+                        "file_url": "{{ steps.submit_invoice.outputs.file_url }}",
+                        "metadata": {"stage": "summary"},
+                    },
+                },
+            },
+        ]
+
+        return {
+            "info_section": {
+                "name": "Invoice Validation Assistant",
+                "description": "Automates extraction and validation of invoice data",
+                "version": "1.0.0",
+                "author": "Mock Generator",
+            },
+            "workflows_section": workflows_section,
+            "ui_structure": ui_structure,
+            "pipeline_structure": pipeline_structure,
+            "rationale": "Preconfigured architecture optimised for invoice document processing.",
+        }
+
+    def _build_workflow_yaml(self) -> str:
+        return """info:
+  name: Invoice Validation Assistant
+  description: Automates extraction and validation of invoice data
+  version: "1.0.0"
+  author: Mock Generator
+workflows:
+  invoice_processing:
+    provider: mock
+    endpoint: http://mock.dify.local/workflows/invoice-processing
+pipeline:
+  steps:
+    - id: submit_invoice
+      component: call_workflow
+      params:
+        workflow: invoice_processing
+        input:
+          file_url: "{{ inputs.invoice_file }}"
+          metadata:
+            source: "upload"
+    - id: summarise_result
+      component: call_workflow
+      params:
+        workflow: invoice_processing
+        input:
+          file_url: "{{ steps.submit_invoice.outputs.file_url }}"
+          metadata:
+            stage: summary
+ui:
+  layout: wizard
+  steps:
+    - id: upload
+      title: 請求書アップロード
+      description: 請求書ファイルをアップロードしてください
+      components:
+        - type: file_upload
+          id: invoice_file
+          props:
+            label: 請求書ファイル
+            binding: invoice_file
+    - id: review
+      title: 結果確認
+      description: 抽出された項目と検証結果を表示します
+      components:
+        - type: table
+          id: validation_summary
+          props:
+            title: 検証サマリー
+            binding: validation_summary
+"""
+
+    def _build_workflow_yaml_validation(self) -> Dict[str, Any]:
+        if self._force_failure:
+            return {
+                "valid": False,
+                "errors": [
+                    "Workflow validation configured to fail for testing.",
+                ],
+                "suggestions": [
+                    "Remove 'force failure' from the prompt to allow success.",
+                ],
+            }
+
+        if self._force_retry and self._validation_attempts == 0:
+            self._validation_attempts += 1
+            return {
+                "valid": False,
+                "errors": [
+                    "Initial validation requested a retry to stabilise the YAML output.",
+                ],
+                "suggestions": ["Retrying once typically resolves the issue."],
+            }
+
+        self._validation_attempts += 1
+        return {
+            "valid": True,
+            "errors": [],
+            "suggestions": [
+                "Configure WORKFLOW_PROVIDER and DIFY_API_KEY when deploying to production."
+            ],
+        }
 
     def _build_validation(self) -> Dict[str, Any]:
         if self._force_failure:

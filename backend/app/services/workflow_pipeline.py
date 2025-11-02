@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import logging
 from pathlib import Path
 from typing import Any, Callable, Dict
@@ -48,16 +49,41 @@ class WorkflowGenerationPipeline:
         """Enqueue a workflow generation job."""
         job_id = str(uuid4())
         step_definitions = [
-            ("analysis", "????"),
-            ("architecture", "?????????"),
-            ("yaml_generation", "YAML??"),
-            ("validation", "???????"),
-            ("packaging", "???????"),
+            ("analysis", "要件分析"),
+            ("architecture", "アーキテクチャ設計"),
+            ("yaml_generation", "YAML生成"),
+            ("validation", "スキーマ検証"),
+            ("packaging", "パッケージング"),
         ]
         job = self._jobs.create_job(job_id, request, step_definitions)
         background_tasks.add_task(self._run_job, job.job_id, request)
         logger.info("Enqueued workflow generation job %s", job_id)
         return job
+
+    def run_sync(
+        self,
+        request: GenerationRequest,
+        progress_callback: Callable[[GenerationJob], None] | None = None,
+    ) -> GenerationJob:
+        """Execute the workflow generation pipeline synchronously."""
+
+        job_id = str(uuid4())
+        step_definitions = [
+            ("analysis", "要件分析"),
+            ("architecture", "アーキテクチャ設計"),
+            ("yaml_generation", "YAML生成"),
+            ("validation", "スキーマ検証"),
+            ("packaging", "パッケージング"),
+        ]
+        self._jobs.create_job(job_id, request, step_definitions)
+        logger.info("Running workflow generation job %s synchronously", job_id)
+        self._notify(job_id, progress_callback)
+        self._run_job(job_id, request, progress_callback=progress_callback)
+
+        final_job = self._jobs.get(job_id)
+        if final_job is None:
+            raise RuntimeError("Job finished without persisted state")
+        return final_job
     
     def _run_job(
         self,
@@ -80,7 +106,7 @@ class WorkflowGenerationPipeline:
                 step_id="analysis",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.RUNNING,
-                message="??????????",
+                message="要件を分析しています",
             )
             self._notify(job_id, progress_callback)
             
@@ -99,7 +125,7 @@ class WorkflowGenerationPipeline:
                 step_id="analysis",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.COMPLETED,
-                message="???????????",
+                message="要件分析が完了しました",
             )
             self._notify(job_id, progress_callback)
             
@@ -109,7 +135,7 @@ class WorkflowGenerationPipeline:
                 step_id="architecture",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.RUNNING,
-                message="???????????????",
+                message="workflow.yamlの構成を設計しています",
             )
             self._notify(job_id, progress_callback)
             
@@ -121,7 +147,7 @@ class WorkflowGenerationPipeline:
                 step_id="architecture",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.COMPLETED,
-                message="????????????????",
+                message="アーキテクチャ設計が完了しました",
             )
             self._notify(job_id, progress_callback)
             
@@ -131,7 +157,7 @@ class WorkflowGenerationPipeline:
                 step_id="yaml_generation",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.RUNNING,
-                message="workflow.yaml????????",
+                message="workflow.yamlを生成しています",
             )
             self._notify(job_id, progress_callback)
             
@@ -147,14 +173,14 @@ class WorkflowGenerationPipeline:
             )
             
             if not success:
-                raise RuntimeError(f"YAML?????????: {'; '.join(errors)}")
+                raise RuntimeError(f"YAMLの自己修正が失敗しました: {'; '.join(errors)}")
             
             self._jobs.update_status(
                 job_id,
                 step_id="yaml_generation",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.COMPLETED,
-                message="workflow.yaml??????????",
+                message="workflow.yamlの生成が完了しました",
             )
             self._notify(job_id, progress_callback)
             
@@ -164,14 +190,14 @@ class WorkflowGenerationPipeline:
                 step_id="validation",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.RUNNING,
-                message="?????????????????",
+                message="生成されたYAMLを検証しています",
             )
             self._notify(job_id, progress_callback)
             
             validation_result = self._validator.validate_complete(yaml_content)
             if not validation_result["valid"]:
                 raise RuntimeError(
-                    f"??????????: {'; '.join(validation_result['all_errors'])}"
+                    f"スキーマ検証に失敗しました: {'; '.join(validation_result['all_errors'])}"
                 )
             
             self._jobs.update_status(
@@ -179,7 +205,7 @@ class WorkflowGenerationPipeline:
                 step_id="validation",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.COMPLETED,
-                message="??????????????",
+                message="スキーマ検証が完了しました",
             )
             self._notify(job_id, progress_callback)
             
@@ -189,7 +215,7 @@ class WorkflowGenerationPipeline:
                 step_id="packaging",
                 job_status=JobStatus.PACKAGING,
                 step_status=StepStatus.RUNNING,
-                message="?????????????????????",
+                message="成果物をパッケージングしています",
             )
             self._notify(job_id, progress_callback)
             
@@ -203,6 +229,9 @@ class WorkflowGenerationPipeline:
                 validation_metadata["model"] = validation_model.model_dump()
 
             metadata = {
+                "job_id": job_id,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "request": request.model_dump(),
                 "workflow_yaml": yaml_content,
                 "analysis": analysis_result.model_dump(),
                 "architecture": architecture_result.model_dump(),

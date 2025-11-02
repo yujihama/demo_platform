@@ -1,282 +1,305 @@
-import { useEffect, useMemo, useState } from "react";
-import { Box, Container, Paper, Stack, Typography, Tabs, Tab } from "@mui/material";
+import { ChangeEvent, useMemo, useState } from "react";
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  Container,
+  Divider,
+  Grid,
+  List,
+  ListItem,
+  ListItemIcon,
+  ListItemText,
+  Paper,
+  Stack,
+  TextField,
+  Typography
+} from "@mui/material";
+import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
+import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
+import HourglassBottomIcon from "@mui/icons-material/HourglassBottom";
+import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
 
-import { StepRequirements } from "./components/StepRequirements";
-import { StepProgress } from "./components/StepProgress";
-import { StepPreview } from "./components/StepPreview";
-import { StepLogs } from "./components/StepLogs";
-import { StepDownload } from "./components/StepDownload";
-import { ErrorBanner } from "./components/ErrorBanner";
-import { createGenerationJob, fetchFeaturesConfig } from "./api";
-import type { FeaturesConfig, GenerationRequest, GenerationStatus, JobStep } from "./types";
+import { createGenerationJob } from "./api";
+import type { GenerationRequest, GenerationStatus, JobStep, WorkflowMetadata } from "./types";
 import { useJobPolling } from "./hooks/useJobPolling";
-import { usePreview } from "./hooks/usePreview";
 import { logger } from "./utils/logger";
 
-const STEP_NAME_MAP: Record<string, string> = {
-  requirements: "要件受付",
-  requirements_decomposition: "要件分解",
-  app_type_classification: "アプリタイプ分類",
-  component_selection: "コンポーネント選定",
-  data_flow_design: "データフロー設計",
-  validation: "仕様バリデーション",
-  mock_agent: "モック仕様",
-  preview: "プレビュー",
-  template_generation: "テンプレート生成",
-  backend_setup: "バックエンド構築",
-  testing: "テスト準備",
-  packaging: "パッケージング"
+const DEFAULT_FORM = {
+  userId: "demo-user",
+  projectId: "workflow-app",
+  projectName: "宣言的ワークフローアプリ",
+  description: "LLMエージェントが生成したworkflow.yamlを確認するためのプロジェクト",
+  requirements: "請求書のAIチェックを行うワークフローを作成してください。"
 };
 
-export default function App() {
-  const [features, setFeatures] = useState<FeaturesConfig | null>(null);
-  const [activeStep, setActiveStep] = useState(0);
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [specId, setSpecId] = useState<string | null>(null);
-  const [submitLoading, setSubmitLoading] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  const [previewApproved, setPreviewApproved] = useState(false);
-  const [lastUseMock, setLastUseMock] = useState(true);
+function buildRequest(form: typeof DEFAULT_FORM): GenerationRequest {
+  return {
+    user_id: form.userId,
+    project_id: form.projectId,
+    project_name: form.projectName,
+    description: form.description,
+    mock_spec_id: "invoice-verification",
+    options: {
+      include_docker: true,
+      include_logging: true,
+      include_playwright: true
+    },
+    requirements_prompt: form.requirements,
+    use_mock: false
+  };
+}
 
-  useEffect(() => {
-    let active = true;
-    fetchFeaturesConfig()
-      .then((config) => {
-        if (!active) return;
-        setFeatures(config);
-        setLastUseMock(config.agents.use_mock);
-      })
-      .catch((error) => logger.warn("Failed to load feature config", error));
-    return () => {
-      active = false;
-    };
-  }, []);
+function stepIcon(step: JobStep) {
+  if (step.status === "completed") {
+    return <CheckCircleOutlineIcon color="success" />;
+  }
+  if (step.status === "failed") {
+    return <ErrorOutlineIcon color="error" />;
+  }
+  if (step.status === "running") {
+    return <HourglassBottomIcon color="warning" />;
+  }
+  return <HourglassBottomIcon color="disabled" />;
+}
 
-  const stepLabels = useMemo(
-    () => [
-      "要件入力",
-      "進捗ダッシュボード",
-      lastUseMock ? "モックプレビュー" : "エージェント設計",
-      "テンプレート生成",
-      "バックエンド設定",
-      "テスト・パッケージ",
-      "成果物ダウンロード"
-    ],
-    [lastUseMock]
+function StepList({ status }: { status: GenerationStatus | null }) {
+  if (!status) {
+    return (
+      <Typography color="text.secondary" variant="body2">
+        まだジョブは開始されていません。
+      </Typography>
+    );
+  }
+
+  return (
+    <List disablePadding>
+      {status.steps.map((step) => (
+        <ListItem key={step.id} sx={{ alignItems: "flex-start" }}>
+          <ListItemIcon sx={{ minWidth: 40 }}>{stepIcon(step)}</ListItemIcon>
+          <ListItemText
+            primary={`${step.label}`}
+            secondary={step.message ?? "進行中"}
+            primaryTypographyProps={{ fontWeight: step.status === "running" ? 600 : 500 }}
+          />
+          <Chip label={translateStepStatus(step.status)} size="small" color={chipColor(step.status)} />
+        </ListItem>
+      ))}
+    </List>
   );
+}
 
-  const { status, loading: pollingLoading, error: pollingError, refresh, stop } = useJobPolling(jobId);
-  const { html, loading: previewLoading, error: previewError } = usePreview(specId);
+function chipColor(status: JobStep["status"]) {
+  switch (status) {
+    case "completed":
+      return "success";
+    case "failed":
+      return "error";
+    case "running":
+      return "warning";
+    default:
+      return "default";
+  }
+}
 
-  const handleSubmit = async (payload: GenerationRequest) => {
+function translateStepStatus(status: JobStep["status"]) {
+  switch (status) {
+    case "completed":
+      return "完了";
+    case "failed":
+      return "失敗";
+    case "running":
+      return "進行中";
+    default:
+      return "待機";
+  }
+}
+
+function MetadataPanels({ metadata }: { metadata: WorkflowMetadata | null | undefined }) {
+  if (!metadata) {
+    return (
+      <Typography color="text.secondary" variant="body2">
+        生成が完了すると、解析結果とworkflow.yamlが表示されます。
+      </Typography>
+    );
+  }
+
+  return (
+    <Stack spacing={3}>
+      <Paper variant="outlined" sx={{ p: 3 }}>
+        <Typography variant="h6" gutterBottom>
+          要件分析サマリー
+        </Typography>
+        <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "var(--font-mono, 'Roboto Mono', monospace)" }}>
+          {JSON.stringify(metadata.analysis, null, 2)}
+        </pre>
+      </Paper>
+
+      <Paper variant="outlined" sx={{ p: 3 }}>
+        <Typography variant="h6" gutterBottom>
+          アーキテクチャ設計
+        </Typography>
+        <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "var(--font-mono, 'Roboto Mono', monospace)" }}>
+          {JSON.stringify(metadata.architecture, null, 2)}
+        </pre>
+      </Paper>
+
+      <Paper variant="outlined" sx={{ p: 3 }}>
+        <Typography variant="h6" gutterBottom>
+          workflow.yaml
+        </Typography>
+        <Box component="pre" sx={{ mt: 1, p: 2, bgcolor: "grey.100", borderRadius: 1, overflow: "auto" }}>
+          {metadata.workflow_yaml}
+        </Box>
+      </Paper>
+    </Stack>
+  );
+}
+
+export default function App() {
+  const [form, setForm] = useState(DEFAULT_FORM);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitLoading, setSubmitLoading] = useState(false);
+
+  const { status, loading: pollingLoading, error: pollingError, refresh } = useJobPolling(jobId);
+
+  const effectiveMetadata = useMemo(() => status?.metadata ?? null, [status]);
+
+  const handleChange = (field: keyof typeof DEFAULT_FORM) =>
+    (event: ChangeEvent<HTMLInputElement>) => {
+      setForm((prev) => ({ ...prev, [field]: event.target.value }));
+    };
+
+  const handleSubmit = async () => {
     setSubmitLoading(true);
     setSubmitError(null);
     try {
+      const payload = buildRequest(form);
       const response = await createGenerationJob(payload);
-      const effectiveUseMock = payload.use_mock ?? features?.agents.use_mock ?? true;
       setJobId(response.job_id);
-      setLastUseMock(effectiveUseMock);
-      setSpecId(effectiveUseMock ? payload.mock_spec_id : null);
-      setActiveStep(1);
-      setPreviewApproved(!effectiveUseMock);
-      logger.info("Generation job created", response.job_id);
+      logger.info("Workflow generation job created", response.job_id);
     } catch (error) {
-      setSubmitError("ジョブの作成に失敗しました。バックエンドが起動しているか確認してください。");
-      logger.error("Failed to create generation job", error);
+      logger.error("Failed to create workflow generation job", error);
+      setSubmitError("ジョブの作成に失敗しました。バックエンドのログを確認してください。");
     } finally {
       setSubmitLoading(false);
     }
   };
 
-  const handleApprovePreview = () => {
-    setPreviewApproved(true);
-    setActiveStep((prev) => Math.max(prev, 3));
-    logger.info("Preview approved, proceeding to build steps");
-  };
-
-  const handleRejectPreview = () => {
-    stop();
-    setJobId(null);
-    setSpecId(null);
-    setActiveStep(0);
-    logger.warn("Preview rejected by user; returning to requirements");
-  };
-
-  const handleRestart = () => {
-    stop();
-    setJobId(null);
-    setSpecId(null);
-    const defaultUseMock = features?.agents.use_mock ?? true;
-    setLastUseMock(defaultUseMock);
-    setPreviewApproved(!defaultUseMock);
-    setActiveStep(0);
-    setSubmitError(null);
-    logger.info("Wizard restarted");
-  };
-
-  const errorMessage = useMemo(() => {
-    if (submitError) return submitError;
-    if (pollingError) return pollingError;
-    if (status?.status === "failed") {
-      const failingStep = status.steps.find((step) => step.status === "failed");
-      return failingStep?.message ?? "バックエンドでエラーが発生しました。";
-    }
-    return null;
-  }, [submitError, pollingError, status]);
-
-  const errorDetails = useMemo(() => {
-    if (status?.status !== "failed") return null;
-    const failingStep = status.steps.find((step) => step.status === "failed");
-    return failingStep?.logs ?? null;
-  }, [status]);
-
-  const templateSteps = filterSteps(status, ["template_generation"]);
-  const backendSteps = filterSteps(status, ["backend_setup"]);
-  const packagingSteps = filterSteps(status, ["testing", "packaging"]);
-
-  const canShowPreview = Boolean(status);
-
-  useEffect(() => {
-    if (!jobId) return;
-    setActiveStep((prev) => (prev < 1 ? 1 : prev));
-  }, [jobId]);
-
-  useEffect(() => {
-    if (!status) return;
-    if (status.status === "failed") return;
-
-    if (previewApproved) {
-      setActiveStep((prev) => Math.max(prev, 3));
-    }
-
-    if (status.status === "templates_rendering" && previewApproved) {
-      setActiveStep((prev) => Math.max(prev, 3));
-    }
-
-    if (status.status === "packaging") {
-      setActiveStep((prev) => Math.max(prev, 5));
-      logger.info("Packaging in progress", status.job_id);
-    }
-
-    if (status.status === "completed") {
-      setActiveStep((prev) => Math.max(prev, 6));
-      logger.info("Generation completed", status.job_id);
-    }
-  }, [status, previewApproved]);
+  const showDownload = status?.status === "completed" && status.download_url;
 
   return (
-    <Box sx={{ py: 6, bgcolor: "#f5f7fb", minHeight: "100vh" }}>
+    <Box sx={{ bgcolor: "#f5f7fb", minHeight: "100vh", py: 6 }}>
       <Container maxWidth="lg">
-        <Stack spacing={3}>
+        <Stack spacing={4}>
           <Box>
             <Typography variant="h4" fontWeight={700} gutterBottom>
-              モック生成ウィザード
+              宣言的ワークフロー生成（Phase 3）
             </Typography>
             <Typography variant="subtitle1" color="text.secondary">
-              Phase 1 (MVP) の要件に基づき、モック仕様からテンプレートベースの成果物を生成します。
+              LLMエージェントに要求を伝えると、workflow.yamlと実行パッケージが生成されます。
             </Typography>
           </Box>
 
-          <Paper variant="outlined">
-            <Tabs
-              value={activeStep}
-              onChange={(_, value) => canNavigateToStep(value, { jobId, status, previewApproved }) && setActiveStep(value)}
-              variant="scrollable"
-              scrollButtons="auto"
-            >
-              {stepLabels.map((label, index) => (
-                <Tab key={label} label={`${index + 1}. ${label}`} />
-              ))}
-            </Tabs>
-          </Paper>
-
-          {errorMessage && <ErrorBanner message={errorMessage} details={errorDetails ?? undefined} onRetry={refresh} />}
-
-          {activeStep === 0 && (
-            <Paper variant="outlined" sx={{ p: 4 }}>
-              <StepRequirements onSubmit={handleSubmit} loading={submitLoading} error={submitError} features={features} />
-            </Paper>
+          {(submitError || pollingError) && (
+            <Alert severity="error">{submitError ?? pollingError}</Alert>
           )}
 
-          {activeStep === 1 && (
-            <StepProgress status={status ?? null} loading={pollingLoading} />
-          )}
-
-          {activeStep === 2 && (
-            lastUseMock ? (
-              canShowPreview && (
-                <StepPreview
-                  html={html}
-                  loading={previewLoading}
-                  error={previewError}
-                  onApprove={handleApprovePreview}
-                  onReject={handleRejectPreview}
-                />
-              )
-            ) : (
-              <Paper variant="outlined" sx={{ p: 4 }}>
-                <Typography variant="h6" gutterBottom>
-                  エージェント設計プレビュー
-                </Typography>
-                <Typography color="text.secondary">
-                  LLMモードではプレビューはありません。進捗ダッシュボードで各エージェントのステータスを確認してください。
-                </Typography>
+          <Grid container spacing={3} alignItems="stretch">
+            <Grid item xs={12} md={5}>
+              <Paper variant="outlined" sx={{ p: 3, height: "100%" }}>
+                <Stack spacing={2}>
+                  <Typography variant="h6">LLMへの依頼内容</Typography>
+                  <TextField
+                    label="要件プロンプト"
+                    multiline
+                    minRows={6}
+                    value={form.requirements}
+                    onChange={handleChange("requirements")}
+                    helperText="アプリの目的や要件を自然言語で記述してください"
+                    fullWidth
+                  />
+                  <Divider />
+                  <Typography variant="subtitle2" color="text.secondary">
+                    メタデータ
+                  </Typography>
+                  <TextField label="ユーザーID" value={form.userId} onChange={handleChange("userId")} fullWidth />
+                  <TextField label="プロジェクトID" value={form.projectId} onChange={handleChange("projectId")} fullWidth />
+                  <TextField label="プロジェクト名" value={form.projectName} onChange={handleChange("projectName")} fullWidth />
+                  <TextField
+                    label="プロジェクト概要"
+                    multiline
+                    minRows={3}
+                    value={form.description}
+                    onChange={handleChange("description")}
+                    fullWidth
+                  />
+                  <Button
+                    variant="contained"
+                    startIcon={<PlayArrowRoundedIcon />}
+                    onClick={handleSubmit}
+                    disabled={submitLoading}
+                  >
+                    {submitLoading ? "生成を開始しています..." : "workflow.yamlを生成"}
+                  </Button>
+                </Stack>
               </Paper>
-            )
-          )}
+            </Grid>
 
-          {activeStep === 3 && (
-            <StepLogs title="テンプレート生成" steps={templateSteps} />
-          )}
+            <Grid item xs={12} md={7}>
+              <Stack spacing={3} sx={{ height: "100%" }}>
+                <Paper variant="outlined" sx={{ p: 3 }}>
+                  <Stack direction="row" spacing={2} alignItems="center" justifyContent="space-between">
+                    <Typography variant="h6">進捗</Typography>
+                    {pollingLoading && <HourglassBottomIcon color="warning" />}
+                  </Stack>
+                  <Divider sx={{ my: 2 }} />
+                  <StepList status={status ?? null} />
+                  <Divider sx={{ my: 2 }} />
+                  <Stack direction="row" spacing={2}>
+                    {jobId && (
+                      <Chip label={`ジョブID: ${jobId}`} size="small" color="default" variant="outlined" />
+                    )}
+                    {status && <Chip label={`状態: ${translateJobStatus(status.status)}`} size="small" color="primary" />}
+                    {showDownload && (
+                      <Button variant="outlined" href={status?.download_url ?? undefined} target="_blank" rel="noreferrer">
+                        ZIPをダウンロード
+                      </Button>
+                    )}
+                    {status?.status === "failed" && (
+                      <Button variant="outlined" onClick={refresh}>
+                        再読込
+                      </Button>
+                    )}
+                  </Stack>
+                </Paper>
 
-          {activeStep === 4 && (
-            <StepLogs title="バックエンド構築" steps={backendSteps} />
-          )}
-
-          {activeStep === 5 && (
-            <StepLogs title="テスト・パッケージング" steps={packagingSteps} />
-          )}
-
-          {activeStep === 6 && <StepDownload status={status ?? null} onRestart={handleRestart} />}
-
-          <Paper variant="outlined" sx={{ p: 3 }}>
-            <Typography variant="subtitle2" gutterBottom>
-              現在のジョブ ID
-            </Typography>
-            <Typography color="text.secondary">{jobId ?? "未生成"}</Typography>
-          </Paper>
+                <MetadataPanels metadata={effectiveMetadata} />
+              </Stack>
+            </Grid>
+          </Grid>
         </Stack>
       </Container>
     </Box>
   );
 }
 
-function filterSteps(status: GenerationStatus | null | undefined, ids: string[]): JobStep[] {
-  if (!status) {
-    return ids.map(
-      (id) => ({ id, label: STEP_NAME_MAP[id] ?? id, status: "pending" } as JobStep)
-    );
+function translateJobStatus(status: GenerationStatus["status"]) {
+  switch (status) {
+    case "completed":
+      return "完了";
+    case "failed":
+      return "失敗";
+    case "packaging":
+      return "パッケージング";
+    case "spec_generating":
+      return "仕様生成中";
+    case "templates_rendering":
+      return "テンプレート生成";
+    case "received":
+    default:
+      return "待機";
   }
-  return status.steps.filter((step) => ids.includes(step.id));
 }
-
-function canNavigateToStep(
-  step: number,
-  context: { jobId: string | null; status: GenerationStatus | null | undefined; previewApproved: boolean }
-) {
-  const { jobId, status, previewApproved } = context;
-  if (step === 0) return true;
-  if (!jobId) return false;
-  if (step === 1) return true;
-  if (step === 2) return Boolean(status);
-  if (step >= 3 && step <= 5) {
-    if (!status) return false;
-    if (!previewApproved) return false;
-    return true;
-  }
-  if (step === 6) {
-    return status?.status === "completed";
-  }
-  return false;
-}
-

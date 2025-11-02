@@ -41,18 +41,21 @@ export interface GenerationStatus {
   status: JobStatus;
   steps: JobStep[];
   download_url?: string | null;
-  metadata?: Record<string, unknown> | null;
+  metadata?: WorkflowMetadata | null;
+}
+
+export interface WorkflowMetadata {
+  job_id: string;
+  generated_at: string;
+  request: GenerationRequest;
+  workflow_yaml: string;
+  analysis: Record<string, unknown>;
+  architecture: Record<string, unknown>;
+  validation: Record<string, unknown>;
 }
 
 export interface ErrorResponse {
   detail?: string;
   message?: string;
-}
-
-export interface FeaturesConfig {
-  agents: {
-    use_mock: boolean;
-    allow_llm_toggle: boolean;
-  };
 }
 
