@@ -489,10 +489,10 @@ class LLMFactory:
         response_path = mock_entry.get("response_path") or self._cfg.features.agents.mock_spec_path
         return MockAgent(Path(response_path).parent if Path(response_path).is_file() else Path(response_path))
 
-    def create_chat_model(self) -> BaseChatModel:
+    def create_chat_model(self, provider_override: Optional[str] = None) -> BaseChatModel:
         llm_cfg = self._cfg.llm
         defaults = llm_cfg.defaults
-        provider = llm_cfg.provider
+        provider = provider_override or llm_cfg.provider
 
         if provider == "mock":
             logger.debug("Using mock structured chat model for LLM pipeline")

@@ -54,6 +54,7 @@ class WorkflowValidator:
         self,
         yaml_content: str,
         previous_errors: List[str] | None = None,
+        provider: str | None = None,
     ) -> tuple[bool, List[str], List[str]]:
         """
         Use LLM validator agent to validate YAML and provide feedback.
@@ -63,7 +64,7 @@ class WorkflowValidator:
         """
         from ..agents.workflow_agents import ValidatorAgent
         
-        llm = self.llm_factory.create_chat_model()
+        llm = self.llm_factory.create_chat_model(provider_override=provider)
         retry_policy = self.llm_factory.get_retry_policy()
         validator = ValidatorAgent(llm, retry_policy)
         
@@ -80,6 +81,7 @@ class WorkflowValidator:
         self,
         yaml_content: str,
         previous_errors: List[str] | None = None,
+        provider: str | None = None,
     ) -> Dict[str, Any]:
         """
         Complete validation: schema validation + LLM validation.
@@ -94,6 +96,7 @@ class WorkflowValidator:
         llm_valid, llm_errors, suggestions = self.validate_with_llm(
             yaml_content,
             previous_errors,
+            provider=provider,
         )
         
         is_valid = schema_valid and llm_valid
@@ -127,6 +130,7 @@ class SelfCorrectionLoop:
         self,
         requirements: Any,  # WorkflowAnalysisResult
         architecture: Any,  # WorkflowArchitectureResult
+        provider: str | None = None,
     ) -> tuple[str, bool, List[str]]:
         """
         Generate workflow.yaml with self-correction loop.
@@ -136,7 +140,7 @@ class SelfCorrectionLoop:
         """
         from ..agents.workflow_agents import YAMLSpecialistAgent
         
-        llm = self.llm_factory.create_chat_model()
+        llm = self.llm_factory.create_chat_model(provider_override=provider)
         retry_policy = self.llm_factory.get_retry_policy()
         specialist = YAMLSpecialistAgent(llm, retry_policy)
         
@@ -160,6 +164,7 @@ class SelfCorrectionLoop:
                 validation_result = self.validator.validate_complete(
                     yaml_content,
                     previous_errors=all_errors if all_errors else None,
+                    provider=provider,
                 )
                 
                 all_errors.extend(validation_result["all_errors"])
