@@ -1,3 +1,5 @@
+# ruff: noqa: F821
+"""Test configuration and fixtures for E2E tests."""
 from __future__ import annotations
 
 import os
@@ -12,8 +14,8 @@ from playwright.sync_api import Page
 from .utils.process import ManagedProcess, start_backend, start_frontend
 
 # Get the workspace root directory
-# ruff: noqa: F821 - __file__ is available at runtime
-WORKSPACE_ROOT: Path = Path(__file__).parent.parent.parent  # noqa: F821
+# __file__ is available at runtime but not during static analysis
+WORKSPACE_ROOT: Path = Path(__file__).parent.parent.parent
 
 
 @pytest.fixture(scope="session")
@@ -38,7 +40,7 @@ def prepare_environment(frontend_server: ManagedProcess) -> None:  # noqa: PT004
 
 @pytest.fixture(scope="session")
 def clean_output_root() -> None:
-    output_root = WORKSPACE_ROOT / "output"  # noqa: F821
+    output_root = WORKSPACE_ROOT / "output"
     if output_root.exists():
         shutil.rmtree(output_root)
     yield None
@@ -55,9 +57,9 @@ def cli_generation(clean_output_root) -> Path:  # type: ignore[override]
         "config/examples/invoice.yaml",
     ]
     env = dict(os.environ)
-    env["PYTHONPATH"] = str(WORKSPACE_ROOT)  # noqa: F821
-    subprocess.run(cmd, check=True, cwd=WORKSPACE_ROOT, env=env)  # noqa: F821
-    return WORKSPACE_ROOT / "output" / "demo-user" / "invoice-verification-mvp"  # noqa: F821
+    env["PYTHONPATH"] = str(WORKSPACE_ROOT)
+    subprocess.run(cmd, check=True, cwd=WORKSPACE_ROOT, env=env)
+    return WORKSPACE_ROOT / "output" / "demo-user" / "invoice-verification-mvp"
 
 
 @pytest.fixture(scope="session")
@@ -71,9 +73,9 @@ def cli_generation_llm(clean_output_root) -> Path:  # type: ignore[override]
         "config/examples/invoice_llm.yaml",
     ]
     env = dict(os.environ)
-    env["PYTHONPATH"] = str(WORKSPACE_ROOT)  # noqa: F821
-    subprocess.run(cmd, check=True, cwd=WORKSPACE_ROOT, env=env)  # noqa: F821
-    return WORKSPACE_ROOT / "output" / "cli-llm-user" / "invoice-validation-llm"  # noqa: F821
+    env["PYTHONPATH"] = str(WORKSPACE_ROOT)
+    subprocess.run(cmd, check=True, cwd=WORKSPACE_ROOT, env=env)
+    return WORKSPACE_ROOT / "output" / "cli-llm-user" / "invoice-validation-llm"
 
 
 @pytest.fixture(scope="session")
@@ -87,9 +89,9 @@ def cli_generation_validation_llm(clean_output_root) -> Path:  # type: ignore[ov
         "config/examples/invoice_validation_llm.yaml",
     ]
     env = dict(os.environ)
-    env["PYTHONPATH"] = str(WORKSPACE_ROOT)  # noqa: F821
-    subprocess.run(cmd, check=True, cwd=WORKSPACE_ROOT, env=env)  # noqa: F821
-    return WORKSPACE_ROOT / "output" / "cli-llm-validation" / "invoice-validation-llm-job"  # noqa: F821
+    env["PYTHONPATH"] = str(WORKSPACE_ROOT)
+    subprocess.run(cmd, check=True, cwd=WORKSPACE_ROOT, env=env)
+    return WORKSPACE_ROOT / "output" / "cli-llm-validation" / "invoice-validation-llm-job"
 
 
 # Additional fixtures for Task B smoke tests
