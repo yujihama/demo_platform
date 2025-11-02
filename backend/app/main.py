@@ -45,7 +45,7 @@ def create_app() -> FastAPI:
         """Initialise directories required by the pipeline."""
 
         generation = cfg.generation
-        for path in [generation.output_root, generation.template_root, Path("mock/previews")]:
+        for path in [generation.output_root, Path("mock/previews")]:
             Path(path).mkdir(parents=True, exist_ok=True)
 
         logger.info("Backend started with mock mode: {provider}", provider=config_manager.llm.provider)

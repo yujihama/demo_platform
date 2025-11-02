@@ -7,7 +7,6 @@ agents:
 
 generation:
   output_root: ./output
-  template_root: ./templates
   package_name_template: "invoice-verification"
   enable_playwright: true
 
