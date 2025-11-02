@@ -86,3 +86,33 @@ class GenerationStatusResponse(BaseModel):
     download_url: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
 
+
+# Conversation API models
+class ConversationRequest(BaseModel):
+    prompt: str = Field(..., description="User's natural language prompt")
+    user_id: str = Field(default="default", description="User identifier")
+
+
+class ConversationResponse(BaseModel):
+    session_id: str
+    status: str
+    message: Optional[str] = None
+
+
+class ConversationMessage(BaseModel):
+    role: str
+    content: str
+    timestamp: Optional[str] = None
+
+
+class ConversationStatusResponse(BaseModel):
+    session_id: str
+    status: str
+    messages: List[ConversationMessage]
+    workflow_ready: bool = False
+
+
+class WorkflowResponse(BaseModel):
+    session_id: str
+    workflow_yaml: str
+

@@ -59,6 +59,34 @@ class WorkflowGenerationPipeline:
         logger.info("Enqueued workflow generation job %s", job_id)
         return job
     
+    def run_sync(
+        self,
+        request: GenerationRequest,
+        progress_callback: Callable[[GenerationJob], None] | None = None,
+    ) -> GenerationJob:
+        """Run workflow generation synchronously."""
+        job_id = str(uuid4())
+        step_definitions = [
+            ("analysis", "??"),
+            ("architecture", "?????????"),
+            ("yaml_generation", "YAML??"),
+            ("validation", "??"),
+            ("packaging", "???????"),
+        ]
+        job = self._jobs.create_job(job_id, request, step_definitions)
+        logger.info("Running workflow generation job %s synchronously", job_id)
+        if progress_callback:
+            self._notify(job_id, progress_callback)
+        self._run_job(
+            job_id,
+            request,
+            progress_callback=progress_callback,
+        )
+        final_job = self._jobs.get(job_id)
+        if final_job is None:
+            raise RuntimeError("Job finished without persisted state")
+        return final_job
+    
     def _run_job(
         self,
         job_id: str,
