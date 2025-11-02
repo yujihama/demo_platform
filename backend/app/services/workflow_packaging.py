@@ -4,106 +4,114 @@ from __future__ import annotations
 
 import json
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from ..models.generation import GenerationJob
 
 
+@dataclass(frozen=True)
+class WorkflowPackageArtifact:
+    """Metadata about the packaged workflow artifacts."""
+
+    zip_path: Path
+    workflow_path: Path
+    docker_compose_path: Path
+    readme_path: Path
+    metadata_path: Optional[Path]
+
+
 class WorkflowPackagingService:
     """Packages workflow.yaml-based applications with docker-compose.yml and .env templates."""
-    
+
     def __init__(self, output_root: Path) -> None:
         self._output_root = output_root
         self._output_root.mkdir(parents=True, exist_ok=True)
-    
+
     def package_workflow_app(
         self,
         job: GenerationJob,
         workflow_yaml: str,
         metadata: Dict[str, Any] | None = None,
-    ) -> Path:
+    ) -> WorkflowPackageArtifact:
+        """Package a workflow.yaml-based application.
+
+        Creates a directory per session containing the generated files and
+        archives them into a distributable zip file.
         """
-        Package a workflow.yaml-based application.
-        
-        Creates a zip file containing:
-        - workflow.yaml
-        - docker-compose.yml (generic template)
-        - .env.example (template with placeholders)
-        - README.md (instructions)
-        """
-        target_dir = self._output_root / job.user_id / job.project_id
+        target_dir = self._output_root / job.job_id
+        if target_dir.exists():
+            for child in target_dir.iterdir():
+                if child.is_file():
+                    child.unlink()
         target_dir.mkdir(parents=True, exist_ok=True)
-        
-        zip_path = target_dir / "app.zip"
-        
-        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
-            # Add workflow.yaml
-            zip_file.writestr("workflow.yaml", workflow_yaml.encode("utf-8"))
-            
-            # Add docker-compose.yml (generic template)
-            docker_compose_content = self._generate_docker_compose()
-            zip_file.writestr("docker-compose.yml", docker_compose_content.encode("utf-8"))
-            
-            # Add .env.example
-            env_example_content = self._generate_env_example()
-            zip_file.writestr(".env.example", env_example_content.encode("utf-8"))
-            
-            # Add README.md
-            readme_content = self._generate_readme(job.project_name, job.description)
-            zip_file.writestr("README.md", readme_content.encode("utf-8"))
-        
-        # Save metadata
+
+        workflow_path = target_dir / "workflow.yaml"
+        workflow_path.write_text(workflow_yaml, encoding="utf-8")
+
+        docker_compose_content = self._generate_docker_compose()
+        docker_compose_path = target_dir / "docker-compose.yml"
+        docker_compose_path.write_text(docker_compose_content, encoding="utf-8")
+
+        env_example_content = self._generate_env_example()
+        (target_dir / ".env.example").write_text(env_example_content, encoding="utf-8")
+
+        readme_content = self._generate_readme(job.project_name, job.description)
+        readme_path = target_dir / "README.md"
+        readme_path.write_text(readme_content, encoding="utf-8")
+
+        metadata_path: Optional[Path] = None
         if metadata:
             metadata_path = target_dir / "metadata.json"
             metadata_path.write_text(
                 json.dumps(metadata, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-        
-        return zip_path
-    
+
+        zip_path = target_dir / "app.zip"
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+            zip_file.write(workflow_path, arcname="workflow.yaml")
+            zip_file.write(docker_compose_path, arcname="docker-compose.yml")
+            zip_file.write(target_dir / ".env.example", arcname=".env.example")
+            zip_file.write(readme_path, arcname="README.md")
+            if metadata_path is not None:
+                zip_file.write(metadata_path, arcname="metadata.json")
+
+        return WorkflowPackageArtifact(
+            zip_path=zip_path,
+            workflow_path=workflow_path,
+            docker_compose_path=docker_compose_path,
+            readme_path=readme_path,
+            metadata_path=metadata_path,
+        )
+
     def _generate_docker_compose(self) -> str:
-        """Generate generic docker-compose.yml for workflow apps."""
+        """Generate docker-compose.yml template for runtime engine distribution."""
+
         return """version: "3.9"
 
 services:
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    command: npm run dev -- --host 0.0.0.0 --port ${FRONTEND_PORT:-5173}
-    env_file:
-      - .env
-    environment:
-      BACKEND_HOST: http://backend:8000
-    volumes:
-      - ./frontend:/app
-      - node_modules:/app/node_modules
-    ports:
-      - "${FRONTEND_PORT:-5173}:5173"
-    depends_on:
-      - backend
-
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    command: uvicorn app.main:app --host 0.0.0.0 --port ${BACKEND_PORT:-8000}
-    env_file:
-      - .env
+  runtime-engine:
+    image: ${RUNTIME_ENGINE_IMAGE:-ghcr.io/demo-platform/runtime-engine:latest}
     environment:
       WORKFLOW_FILE: /app/workflow.yaml
-      REDIS_URL: redis://redis:6379/0
-      DIFY_API_ENDPOINT: http://dify-mock:3000/v1
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     volumes:
-      - ./backend:/app
       - ./workflow.yaml:/app/workflow.yaml:ro
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "${RUNTIME_ENGINE_PORT:-8000}:8000"
     depends_on:
       - redis
-      - dify-mock
+
+  runtime-ui:
+    image: ${RUNTIME_UI_IMAGE:-ghcr.io/demo-platform/runtime-ui:latest}
+    environment:
+      RUNTIME_API_URL: http://runtime-engine:8000
+    ports:
+      - "${RUNTIME_UI_PORT:-4173}:4173"
+    depends_on:
+      - runtime-engine
 
   redis:
     image: redis:7-alpine
@@ -112,88 +120,57 @@ services:
     volumes:
       - redis_data:/data
 
-  dify-mock:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    command: uvicorn app.mock_main:app --host 0.0.0.0 --port 3000
-    environment:
-      PYTHONPATH: /app
-    ports:
-      - "3000:3000"
-    depends_on:
-      - redis
-
 volumes:
-  node_modules: {}
   redis_data: {}
 """
-    
+
     def _generate_env_example(self) -> str:
         """Generate .env.example template."""
-        return """# Backend Configuration
-BACKEND_PORT=8000
-WORKFLOW_FILE=workflow.yaml
+
+        return """# Runtime Engine Configuration
+RUNTIME_ENGINE_IMAGE=ghcr.io/demo-platform/runtime-engine:latest
+RUNTIME_ENGINE_PORT=8000
 REDIS_URL=redis://redis:6379/0
 
-# Frontend Configuration
-FRONTEND_PORT=5173
+# Runtime UI Configuration
+RUNTIME_UI_IMAGE=ghcr.io/demo-platform/runtime-ui:latest
+RUNTIME_UI_PORT=4173
 
 # Redis Configuration
 REDIS_PORT=6379
-
-# Workflow Provider Configuration
-WORKFLOW_PROVIDER=mock
-# For production, set to 'dify' and configure:
-# WORKFLOW_PROVIDER=dify
-# DIFY_API_ENDPOINT=https://api.dify.ai/v1
-# DIFY_API_KEY=your-api-key-here
-
-# Dify API Configuration (if using dify provider)
-# DIFY_API_ENDPOINT=https://api.dify.ai/v1
-# DIFY_API_KEY=your-api-key-here
 """
-    
+
     def _generate_readme(self, app_name: str, description: str) -> str:
-        """Generate README.md with setup instructions."""
+        """Generate README.md with minimal setup instructions."""
+
+        details = description.strip() or "このアプリケーションは workflow.yaml に基づいて動作します。"
         return f"""# {app_name}
 
-{description}
+{details}
 
-## Setup
+## セットアップ手順
 
-1. Copy `.env.example` to `.env`:
+1. `.env.example` を `.env` にコピーし、必要に応じてイメージ名やポートを調整します。
+
    ```bash
    cp .env.example .env
    ```
 
-2. Edit `.env` and configure:
-   - Set `WORKFLOW_PROVIDER` to `dify` for production (or keep `mock` for development)
-   - If using Dify, add your `DIFY_API_KEY` and `DIFY_API_ENDPOINT`
+2. Docker Compose でサービスを起動します。
 
-3. Start the application:
    ```bash
    docker-compose up -d
    ```
 
-4. Access the application:
-   - Frontend: http://localhost:5173
-   - Backend API: http://localhost:8000
+3. ブラウザでランタイム UI にアクセスします。
 
-## Stopping the Application
+   - http://localhost:${{RUNTIME_UI_PORT:-4173}}
 
-```bash
-docker-compose down
-```
+4. アプリの動作が完了したら、次のコマンドで停止します。
 
-## Configuration
+   ```bash
+   docker-compose down
+   ```
 
-The application behavior is controlled by `workflow.yaml`. 
-This file defines:
-- Application metadata
-- UI structure and components
-- Processing pipeline steps
-- External API endpoints (workflows)
-
-To modify the application, edit `workflow.yaml` and restart the services.
+このパッケージに含まれる `workflow.yaml` を編集することで、アプリの挙動を変更できます。
 """

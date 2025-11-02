@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api import router
+from .conversation_api import router as conversation_router
 from .mock.dify import router as dify_mock_router
 from .runtime_api import get_runtime_service, router as runtime_router
 from .config import config_manager
@@ -28,6 +29,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(router)
+    app.include_router(conversation_router)
     app.include_router(runtime_router)
     app.include_router(dify_mock_router)
 
