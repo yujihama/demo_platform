@@ -40,15 +40,18 @@ class WorkflowPackagingService:
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
             # Add workflow.yaml
             zip_file.writestr("workflow.yaml", workflow_yaml.encode("utf-8"))
-            
+
             # Add docker-compose.yml (generic template)
             docker_compose_content = self._generate_docker_compose()
             zip_file.writestr("docker-compose.yml", docker_compose_content.encode("utf-8"))
-            
+
             # Add .env.example
             env_example_content = self._generate_env_example()
             zip_file.writestr(".env.example", env_example_content.encode("utf-8"))
-            
+
+            # Add default .env (copy of example for convenience)
+            zip_file.writestr(".env", env_example_content.encode("utf-8"))
+
             # Add README.md
             readme_content = self._generate_readme(job.project_name, job.description)
             zip_file.writestr("README.md", readme_content.encode("utf-8"))
