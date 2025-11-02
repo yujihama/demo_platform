@@ -38,10 +38,7 @@ export async function submitRuntimeStep(
       formData.append("payload", JSON.stringify({ data: options.data ?? {} }));
       return client.post<WorkflowSessionState>(
         `/runtime/sessions/${sessionId}/steps/${stepId}`,
-        formData,
-        {
-          headers: { "Content-Type": "multipart/form-data" }
-        }
+        formData
       );
     }
     return client.post<WorkflowSessionState>(
