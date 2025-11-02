@@ -1,6 +1,6 @@
 # デモアプリケーション生成プラットフォーム
 
-Phase 1 (MVP) のためのフロントエンド・バックエンド・CLI・E2E テストを備えた生成プラットフォームです。LLM/Dify はモック実装で置き換え、UI/CLI の双方からテンプレートベースのアプリ生成フローを体験できます。
+Phase 1 (MVP) のためのフロントエンド・バックエンド・CLI・E2E テストを備えた生成プラットフォームです。LLM/Dify はモック実装で置き換え、UI/CLI の双方からテンプレートベースのアプリ生成フローを体験できます。さらに Phase 1 / 2 の成果物として、`workflow.yaml` を解釈して実行する汎用実行エンジンと動的 UI を統合しています。
 
 ## 必要要件
 
@@ -38,7 +38,18 @@ Phase 1 (MVP) のためのフロントエンド・バックエンド・CLI・E2E
    docker compose up --build
    ```
 
-バックエンドは `http://localhost:${BACKEND_PORT}` (デフォルト `8000`)、フロントエンドは `http://localhost:${FRONTEND_PORT}` (デフォルト `5173`) でアクセスできます。
+バックエンドは `http://localhost:${BACKEND_PORT}` (デフォルト `8000`)、フロントエンドは `http://localhost:${FRONTEND_PORT}` (デフォルト `5173`) でアクセスできます。Redis は `localhost:${REDIS_PORT}`、Dify モックサーバーは `http://localhost:3000` に起動します。
+
+## 宣言的ワークフロー実行
+
+`workflow.yaml` に定義された UI / パイプラインを汎用実行エンジンが解釈します。
+
+- フロントエンドは `/api/runtime/workflow` を読み取り、`ui.steps` に従ってウィザードを構築します。
+- ファイルアップロードなどの入力はセッション (`/api/runtime/sessions`) 経由でバックエンドに送信されます。
+- バックエンドは Redis にセッション状態を保存し、`call_workflow` コンポーネントで Dify / モック API を呼び出します。
+- 実行結果は `view.*` として公開され、UI コンポーネント（テーブル等）が動的に描画されます。
+
+`workflow.yaml` を編集して `docker compose up` し直すだけで挙動を変更できます。モックサーバーは `http://localhost:3000/v1/workflows/<workflow_id>/run` を提供し、入力値をエコーした動的レスポンスを返します。
 
 ## CLI 生成フロー
 
@@ -54,6 +65,7 @@ python -m backend.cli generate --config config\examples\invoice.yaml
 
 - テンプレート: `templates/`
 - モック仕様書: `mock/specs/`
+- 宣言的ワークフロー: `workflow.yaml`
 - 生成成果物: `output/`
 
 ## テスト

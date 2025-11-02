@@ -1,0 +1,79 @@
+info:
+  name: "請求書検証デモ"
+  description: "請求書ファイルをアップロードし、モックの検証結果を表示します。"
+  version: "1.0.0"
+  author: "Demo Platform"
+
+workflows:
+  invoice_validation:
+    provider: mock
+    endpoint: "http://dify-mock:3000/v1/workflows/invoice-validation/run"
+
+ui:
+  layout: wizard
+  steps:
+    - id: upload_invoice
+      title: "請求書アップロード"
+      description: "請求書ファイルを選択し、検証を実行してください。"
+      components:
+        - type: file_upload
+          id: invoice_file
+          props:
+            label: "請求書ファイル (PDFまたは画像)"
+            accept:
+              - application/pdf
+              - image/png
+              - image/jpeg
+        - type: button
+          id: execute_validation
+          props:
+            label: "検証を実行"
+            action: submit
+    - id: validation_results
+      title: "検証結果"
+      description: "モックサーバーから返却された検証結果を表示します。"
+      components:
+        - type: alert
+          id: validation_summary
+          props:
+            severity: info
+            message: "検証はモックサーバーで実行されています。実際のAPIと置き換えることで本番運用が可能です。"
+        - type: table
+          id: validation_table
+          props:
+            title: "検証結果一覧"
+            data_path: view.validation.items
+            columns:
+              - field: field
+                label: "項目"
+              - field: status
+                label: "ステータス"
+              - field: detail
+                label: "詳細"
+
+pipeline:
+  steps:
+    - id: capture_invoice
+      component: file_uploader
+      params:
+        input_id: invoice_file
+        target: inputs.invoice_file
+        view_path: steps.upload.invoice_file
+    - id: call_validation
+      component: call_workflow
+      params:
+        workflow: invoice_validation
+        input_mapping:
+          invoice_file: $inputs.invoice_file
+        output_path: steps.call_validation.response
+        view_path: view.validation.raw_response
+    - id: build_validation_table
+      component: for_each
+      params:
+        source: steps.call_validation.response.outputs.items
+        target: view.validation.items
+        view_path: view.validation.items
+        map:
+          field: "{{ item.field }}"
+          status: "{{ item.status }}"
+          detail: "{{ item.detail }}"
