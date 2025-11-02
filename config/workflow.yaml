@@ -1,0 +1,66 @@
+info:
+  name: "請求書検証アプリ"
+  description: "アップロードされた請求書CSVを検証し、結果を表示します。"
+  version: "1.0.0"
+
+workflows:
+  invoice_validation:
+    provider: mock
+    endpoint: http://dify-mock:8080/v1/workflows/invoice_validation/run
+
+ui:
+  layout: wizard
+  steps:
+    - id: upload
+      title: "ファイルアップロード"
+      description: "請求書CSVファイルをアップロードしてください。"
+      components:
+        - type: file_upload
+          id: invoice_file
+          props:
+            label: "請求書CSV"
+            helperText: "UTF-8のCSVファイルをアップロード"
+        - type: button
+          id: start_validation
+          props:
+            label: "検証を実行"
+            variant: "contained"
+            action: "advance"
+    - id: result
+      title: "検証結果"
+      description: "検証された内容を一覧表示します。"
+      components:
+        - type: table
+          id: validation_table
+          props:
+            title: "検証結果"
+            binding: "validation_table"
+            columns:
+              - field: "項目"
+                headerName: "項目"
+              - field: "値"
+                headerName: "値"
+
+pipeline:
+  steps:
+    - id: upload_invoice
+      component: file_uploader
+      params:
+        component_id: invoice_file
+        output_key: invoice_content
+        required: true
+    - id: call_invoice_workflow
+      component: call_workflow
+      params:
+        workflow: invoice_validation
+        inputs:
+          invoice_csv: "{{ context.invoice_content }}"
+        output_key: workflow_response
+    - id: build_table
+      component: for_each
+      params:
+        source: "{{ context.workflow_response.outputs.items }}"
+        template:
+          項目: "{{ item.field }}"
+          値: "{{ item.value }}"
+        output_key: validation_table
