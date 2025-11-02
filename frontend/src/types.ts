@@ -1,58 +1,65 @@
-export type JobStatus =
-  | "received"
-  | "spec_generating"
-  | "templates_rendering"
-  | "packaging"
-  | "completed"
-  | "failed";
-
-export type StepStatus = "pending" | "running" | "completed" | "failed";
-
-export interface GenerationRequest {
-  user_id: string;
-  project_id: string;
-  project_name: string;
+export interface WorkflowInfo {
+  name: string;
   description: string;
-  mock_spec_id: string;
-  options: {
-    include_playwright: boolean;
-    include_docker: boolean;
-    include_logging: boolean;
-  };
-  requirements_prompt?: string | null;
-  use_mock?: boolean | null;
+  version: string;
+  author?: string | null;
 }
 
-export interface GenerationResponse {
-  job_id: string;
-  status: JobStatus;
+export interface WorkflowProvider {
+  provider: "mock" | "dify";
+  endpoint: string;
+  api_key_env?: string | null;
 }
 
-export interface JobStep {
+export interface UIComponent {
+  type: string;
   id: string;
-  label: string;
-  status: StepStatus;
-  message?: string;
-  logs?: string[];
+  props?: Record<string, unknown>;
 }
 
-export interface GenerationStatus {
-  job_id: string;
-  status: JobStatus;
-  steps: JobStep[];
-  download_url?: string | null;
-  metadata?: Record<string, unknown> | null;
+export interface UIStep {
+  id: string;
+  title: string;
+  description?: string | null;
+  components: UIComponent[];
 }
 
-export interface ErrorResponse {
-  detail?: string;
-  message?: string;
+export interface UISection {
+  layout: string;
+  steps: UIStep[];
 }
 
-export interface FeaturesConfig {
-  agents: {
-    use_mock: boolean;
-    allow_llm_toggle: boolean;
-  };
+export interface PipelineStep {
+  id: string;
+  component: string;
+  params?: Record<string, unknown>;
+  condition?: string | null;
+  on_error?: string | null;
 }
 
+export interface PipelineSection {
+  steps: PipelineStep[];
+}
+
+export interface WorkflowYaml {
+  info: WorkflowInfo;
+  workflows: Record<string, WorkflowProvider>;
+  ui?: UISection | null;
+  pipeline: PipelineSection;
+}
+
+export type WorkflowSessionStatus = "idle" | "running" | "completed" | "failed";
+
+export interface WorkflowSessionResponse {
+  session_id: string;
+  status: WorkflowSessionStatus;
+  current_step?: string | null;
+  view: Record<string, unknown>;
+  context: Record<string, unknown>;
+  error?: string | null;
+}
+
+export interface SessionExecuteRequest {
+  step_id?: string | null;
+  inputs: Record<string, unknown>;
+}
