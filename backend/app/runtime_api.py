@@ -16,7 +16,11 @@ from .models.runtime import (
 )
 from .workflow_runtime.exceptions import ComponentExecutionError, SessionNotFoundError
 from .workflow_runtime.service import WorkflowRuntimeService
-from .workflow_runtime.storage import create_session_store
+from .workflow_runtime.storage import (
+    InMemorySessionStore,
+    SessionStoreError,
+    create_session_store,
+)
 
 router = APIRouter(prefix="/api/runtime", tags=["workflow-runtime"])
 
@@ -24,8 +28,20 @@ router = APIRouter(prefix="/api/runtime", tags=["workflow-runtime"])
 @lru_cache(maxsize=1)
 def get_runtime_service() -> WorkflowRuntimeService:
     workflow_path = Path(os.getenv("WORKFLOW_FILE", "workflow.yaml"))
-    redis_url = os.getenv("REDIS_URL") or "redis://redis:6379/0"
-    store = create_session_store(redis_url)
+    raw_redis_url = os.getenv("REDIS_URL")
+    if raw_redis_url and raw_redis_url.strip().lower() in {"memory", "memory://"}:
+        redis_url: str | None = None
+    else:
+        redis_url = raw_redis_url or "redis://redis:6379/0"
+
+    try:
+        store = create_session_store(redis_url, allow_fallback=False)
+    except SessionStoreError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    if redis_url and isinstance(store, InMemorySessionStore):
+        raise HTTPException(status_code=503, detail="Redis session store unavailable")
+
     return WorkflowRuntimeService(workflow_path=workflow_path, session_store=store)
 
 

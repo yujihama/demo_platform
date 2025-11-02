@@ -14,6 +14,10 @@ except Exception:  # pragma: no cover - redis optional in tests
     redis = None  # type: ignore
 
 
+class SessionStoreError(RuntimeError):
+    """Raised when a session store cannot be initialized."""
+
+
 class SessionStore:
     """Abstract store for workflow sessions."""
 
@@ -72,14 +76,24 @@ class RedisSessionStore(SessionStore):
         return f"{self._namespace}:{session_id}"
 
 
-def create_session_store(redis_url: Optional[str] = None) -> SessionStore:
+def create_session_store(
+    redis_url: Optional[str] = None,
+    *,
+    allow_fallback: bool = True,
+) -> SessionStore:
     """Create a session store using Redis when available."""
 
-    if redis_url and redis is not None:
+    if redis_url:
+        if redis is None:
+            if allow_fallback:
+                return InMemorySessionStore()
+            raise SessionStoreError("redis package not installed")
         try:
             client = redis.Redis.from_url(redis_url, decode_responses=False)
             client.ping()
             return RedisSessionStore(client)
-        except Exception:  # pragma: no cover - fallback when redis unavailable
-            pass
+        except Exception as exc:  # pragma: no cover - fallback when redis unavailable
+            if allow_fallback:
+                return InMemorySessionStore()
+            raise SessionStoreError("unable to connect to Redis") from exc
     return InMemorySessionStore()
