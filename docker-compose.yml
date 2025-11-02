@@ -8,14 +8,21 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port ${BACKEND_PORT:-8000}
     env_file:
       - .env
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      WORKFLOW_FILE: /app/workflow.yaml
     volumes:
       - ./backend:/app
       - ./config:/app/config
       - ./templates:/app/templates
       - ./output:/app/output
       - ./mock:/app/mock
+      - ./workflow.yaml:/app/workflow.yaml:ro
     ports:
       - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      - redis
+      - dify-mock
 
   frontend:
     build:
@@ -34,6 +41,26 @@ services:
     depends_on:
       - backend
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+
+  dify-mock:
+    build:
+      context: ./mock/dify_server
+      dockerfile: Dockerfile
+    command: uvicorn main:app --host 0.0.0.0 --port ${DIFY_MOCK_PORT:-8001}
+    environment:
+      MOCK_SERVER_PORT: ${DIFY_MOCK_PORT:-8001}
+    ports:
+      - "${DIFY_MOCK_PORT:-8001}:8001"
+    volumes:
+      - ./mock/dify_server:/app
+
 volumes:
   node_modules: {}
+  redis_data: {}
 

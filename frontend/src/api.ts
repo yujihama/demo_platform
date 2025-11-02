@@ -1,29 +1,46 @@
 import axios from "axios";
-import type { FeaturesConfig, GenerationRequest, GenerationResponse, GenerationStatus } from "./types";
+import type {
+  ExecuteResponse,
+  SessionCreateResponse,
+  SessionStateResponse,
+  WorkflowDefinitionResponse
+} from "./types";
+
+const baseURL = import.meta.env.VITE_BACKEND_URL ?? "/api";
 
 const client = axios.create({
-  baseURL: import.meta.env.VITE_BACKEND_URL ?? "/api"
+  baseURL
 });
 
-export async function createGenerationJob(payload: GenerationRequest) {
-  const { data } = await client.post<GenerationResponse>('/generate', payload);
-  return data;
+export async function fetchWorkflowDefinition() {
+  const { data } = await client.get<WorkflowDefinitionResponse>("/workflow/definition");
+  return data.workflow;
 }
 
-export async function fetchJob(jobId: string) {
-  const { data } = await client.get<GenerationStatus>(`/generate/${jobId}`);
-  return data;
+export async function createWorkflowSession() {
+  const { data } = await client.post<SessionCreateResponse>("/workflow/sessions");
+  return data.session;
 }
 
-export async function fetchPreview(specId: string) {
-  const { data } = await client.get(`/preview/${specId}`, {
-    responseType: 'text'
-  });
-  return data as string;
+export async function fetchWorkflowSession(sessionId: string) {
+  const { data } = await client.get<SessionStateResponse>(`/workflow/sessions/${sessionId}`);
+  return data.session;
 }
 
-export async function fetchFeaturesConfig() {
-  const { data } = await client.get<FeaturesConfig>('/config/features');
-  return data;
+export async function uploadWorkflowInput(sessionId: string, stepId: string, file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+  const { data } = await client.post<SessionStateResponse>(
+    `/workflow/sessions/${sessionId}/inputs/${stepId}`,
+    formData,
+    {
+      headers: { "Content-Type": "multipart/form-data" }
+    }
+  );
+  return data.session;
 }
 
+export async function executeWorkflow(sessionId: string) {
+  const { data } = await client.post<ExecuteResponse>(`/workflow/sessions/${sessionId}/execute`);
+  return data.session;
+}

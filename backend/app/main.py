@@ -9,6 +9,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api import router
+from .workflow_api import router as workflow_router
+from .runtime.engine import build_engine
 from .config import config_manager
 from .logging import configure_logging, logger
 
@@ -26,6 +28,9 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(router)
+    app.include_router(workflow_router)
+
+    workflow_engine = build_engine()
 
     allowed_origins = list({cfg.frontend.base_url, "http://localhost:5173", "http://127.0.0.1:5173"})
     app.add_middleware(
@@ -45,6 +50,11 @@ def create_app() -> FastAPI:
             Path(path).mkdir(parents=True, exist_ok=True)
 
         logger.info("Backend started with mock mode: {provider}", provider=config_manager.llm.provider)
+
+        try:
+            await workflow_engine.ensure_ready()
+        except Exception as exc:  # pragma: no cover - best effort initialisation
+            logger.warning("Workflow runtime initialisation failed: {error}", error=str(exc))
 
     return app
 

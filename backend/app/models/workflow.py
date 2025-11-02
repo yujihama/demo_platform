@@ -35,6 +35,7 @@ class UIStep(BaseModel):
     title: str = Field(..., description="Step title")
     description: Optional[str] = Field(default=None, description="Step description")
     components: List[UIComponent] = Field(default_factory=list, description="Components in this step")
+    props: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata for the step")
 
 
 class UISection(BaseModel):
