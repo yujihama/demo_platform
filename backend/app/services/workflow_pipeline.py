@@ -67,11 +67,11 @@ class WorkflowGenerationPipeline:
             shutil.rmtree(workspace)
         workspace.mkdir(parents=True, exist_ok=True)
 
-        prompt = (request.requirements_prompt or request.description or "").strip()
-        if not prompt:
-            raise ValueError("requirements_prompt または description が必要です")
-
         try:
+            prompt = (request.requirements_prompt or request.description or "").strip()
+            if not prompt:
+                raise ValueError("requirements_prompt または description が必要です")
+
             self._jobs.update_status(
                 job_id,
                 step_id="analysis",
