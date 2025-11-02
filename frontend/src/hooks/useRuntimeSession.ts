@@ -40,6 +40,7 @@ export function useRuntimeSession() {
   }, []);
 
   const initialise = useCallback(async () => {
+    stopPolling();
     setState({ workflow: null, session: null, loading: true, error: null });
     try {
       const created = await createRuntimeSession();
@@ -51,7 +52,7 @@ export function useRuntimeSession() {
       logger.error("セッション初期化に失敗", error);
       setState({ workflow: null, session: null, loading: false, error: "セッションの作成に失敗しました。" });
     }
-  }, [startPolling]);
+  }, [startPolling, stopPolling]);
 
   useEffect(() => {
     initialise();
