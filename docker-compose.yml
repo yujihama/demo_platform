@@ -16,6 +16,9 @@ services:
       - ./mock:/app/mock
     ports:
       - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      - redis
+      - dify-mock
 
   frontend:
     build:
@@ -33,6 +36,22 @@ services:
       - "${FRONTEND_PORT:-5173}:5173"
     depends_on:
       - backend
+
+  dify-mock:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: uvicorn app.mock_dify:app --host 0.0.0.0 --port ${DIFY_MOCK_PORT:-8001}
+    volumes:
+      - ./backend:/app
+    ports:
+      - "${DIFY_MOCK_PORT:-8001}:8001"
+
+  redis:
+    image: redis:7.2-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: redis-server --appendonly yes
 
 volumes:
   node_modules: {}

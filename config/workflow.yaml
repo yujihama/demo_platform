@@ -1,0 +1,94 @@
+info:
+  name: "Invoice Review App"
+  description: "請求書CSVをアップロードし、Difyワークフローで明細を解析します。"
+  version: "1.0.0"
+  author: "Demo Platform Team"
+
+workflows:
+  invoice_processor:
+    provider: mock
+    endpoint: "http://dify-mock:8001/v1/workflows/invoice-processor"
+
+ui:
+  layout: wizard
+  steps:
+    - id: upload
+      title: "請求書をアップロード"
+      description: "CSV形式の請求書ファイルをアップロードしてください。ヘッダーは item, quantity, unit_price を想定しています。"
+      components:
+        - type: file_upload
+          id: invoice_file
+          props:
+            label: "請求書CSVを選択"
+            accept: ".csv"
+            helperText: "例: item,quantity,unit_price"
+        - type: button
+          id: analyze_button
+          props:
+            label: "解析を開始"
+            action: submit
+            target_step: upload_invoice
+            color: primary
+    - id: results
+      title: "解析結果"
+      description: "抽出された明細と合計金額が表示されます。"
+      components:
+        - type: text
+          id: summary_text
+          props:
+            variant: h6
+            template: "合計金額: ￥{{ context.raw_response.summary.total_amount | round(2) }}"
+        - type: table
+          id: result_table
+          props:
+            source: invoice_items
+            columns:
+              - field: item
+                label: "項目"
+              - field: quantity
+                label: "数量"
+              - field: unit_price
+                label: "単価"
+              - field: amount
+                label: "金額"
+        - type: button
+          id: reset_button
+          props:
+            label: "別のファイルを解析"
+            action: reset
+
+pipeline:
+  steps:
+    - id: upload_invoice
+      component: file_uploader
+      params:
+        ui_step: upload
+        input_components:
+          - invoice_file
+        target_key: invoice.invoice_csv
+        metadata_key: invoice.metadata
+        encoding: utf-8
+        as_text: true
+    - id: invoke_workflow
+      component: call_workflow
+      params:
+        ui_step: results
+        activate_ui_step: results
+        workflow: invoice_processor
+        input_template:
+          invoice_csv: "{{ private.invoice.invoice_csv }}"
+        response_path: data
+        target_key: invoice.raw_response
+        expose_public_key: raw_response
+    - id: transform_items
+      component: for_each
+      params:
+        ui_step: results
+        items_path: raw_response.items
+        output_path: invoice_items
+        item_name: item
+        template:
+          item: "{{ item.name }}"
+          quantity: "{{ item.quantity }}"
+          unit_price: "{{ '%.2f' % item.unit_price }}"
+          amount: "{{ '%.2f' % item.amount }}"

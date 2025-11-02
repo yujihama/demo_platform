@@ -44,12 +44,33 @@ class GenerationSettings(BaseModel):
         return Path(value).expanduser().resolve()
 
 
+class RuntimeSettings(BaseModel):
+    workflow_path: Path = Field(
+        default=Path("./config/workflow.yaml"),
+        description="Path to the workflow.yaml definition interpreted by the runtime engine",
+    )
+    redis_url: str = Field(
+        default="redis://localhost:6379/0",
+        description="Redis connection URL for workflow runtime session storage",
+    )
+    session_ttl_seconds: int = Field(
+        default=3600,
+        ge=60,
+        description="TTL for workflow runtime sessions in seconds",
+    )
+
+    @validator("workflow_path", pre=True)
+    def _expand_path(cls, value: Any) -> Path:
+        return Path(value).expanduser().resolve()
+
+
 class FeatureConfig(BaseModel):
     phase: str = Field("mvp")
     agents: AgentSettings
     generation: GenerationSettings
     frontend: FrontendSettings
     backend: BackendSettings
+    runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
 
 
 class LLMDefaults(BaseModel):

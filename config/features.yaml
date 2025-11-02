@@ -19,3 +19,8 @@ backend:
   base_url: http://localhost:8000
   log_level: INFO
 
+runtime:
+  workflow_path: ./config/workflow.yaml
+  redis_url: redis://redis:6379/0
+  session_ttl_seconds: 3600
+

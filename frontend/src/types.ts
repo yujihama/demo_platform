@@ -1,58 +1,55 @@
-export type JobStatus =
-  | "received"
-  | "spec_generating"
-  | "templates_rendering"
-  | "packaging"
-  | "completed"
-  | "failed";
+export type StepStatus = "pending" | "running" | "completed" | "error";
+export type SessionStatus = "awaiting_input" | "processing" | "completed" | "error";
 
-export type StepStatus = "pending" | "running" | "completed" | "failed";
-
-export interface GenerationRequest {
-  user_id: string;
-  project_id: string;
-  project_name: string;
+export interface WorkflowInfo {
+  name: string;
   description: string;
-  mock_spec_id: string;
-  options: {
-    include_playwright: boolean;
-    include_docker: boolean;
-    include_logging: boolean;
-  };
-  requirements_prompt?: string | null;
-  use_mock?: boolean | null;
+  version: string;
+  author?: string | null;
 }
 
-export interface GenerationResponse {
-  job_id: string;
-  status: JobStatus;
-}
-
-export interface JobStep {
+export interface UIComponent {
+  type: string;
   id: string;
-  label: string;
-  status: StepStatus;
-  message?: string;
-  logs?: string[];
+  props: Record<string, unknown>;
 }
 
-export interface GenerationStatus {
-  job_id: string;
-  status: JobStatus;
-  steps: JobStep[];
-  download_url?: string | null;
-  metadata?: Record<string, unknown> | null;
+export interface UIStep {
+  id: string;
+  title: string;
+  description?: string | null;
+  components: UIComponent[];
 }
 
-export interface ErrorResponse {
-  detail?: string;
-  message?: string;
+export interface UISection {
+  layout: string;
+  steps: UIStep[];
 }
 
-export interface FeaturesConfig {
-  agents: {
-    use_mock: boolean;
-    allow_llm_toggle: boolean;
-  };
+export interface PipelineStepDefinition {
+  id: string;
+  component: string;
+  params: Record<string, any>;
 }
 
+export interface PipelineSection {
+  steps: PipelineStepDefinition[];
+}
+
+export interface WorkflowDefinition {
+  info: WorkflowInfo;
+  ui?: UISection;
+  pipeline: PipelineSection;
+}
+
+export interface WorkflowSessionState {
+  session_id: string;
+  workflow_id: string;
+  status: SessionStatus;
+  active_ui_step?: string | null;
+  completed_ui_steps: string[];
+  step_status: Record<string, StepStatus>;
+  context: Record<string, any>;
+  last_error?: string | null;
+  updated_at: string;
+}
