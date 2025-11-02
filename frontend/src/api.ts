@@ -29,3 +29,57 @@ export async function fetchWorkflowSession(sessionId: string) {
   const { data } = await client.get<WorkflowSessionResponse>(`/runtime/sessions/${sessionId}`);
   return data;
 }
+
+// Conversation API
+export interface ConversationRequest {
+  prompt: string;
+  user_id?: string;
+}
+
+export interface ConversationResponse {
+  session_id: string;
+  status: string;
+  message?: string | null;
+}
+
+export interface ConversationMessage {
+  role: string;
+  content: string;
+  timestamp?: string | null;
+}
+
+export interface ConversationStatusResponse {
+  session_id: string;
+  status: string;
+  messages: ConversationMessage[];
+  workflow_ready: boolean;
+}
+
+export interface WorkflowResponse {
+  session_id: string;
+  workflow_yaml: string;
+}
+
+export async function createConversation(payload: ConversationRequest) {
+  const { data } = await client.post<ConversationResponse>("/generate/conversations", payload);
+  return data;
+}
+
+export async function getConversationStatus(sessionId: string) {
+  const { data } = await client.get<ConversationStatusResponse>(
+    `/generate/conversations/${sessionId}`,
+  );
+  return data;
+}
+
+export async function getConversationWorkflow(sessionId: string) {
+  const { data } = await client.get<WorkflowResponse>(`/generate/conversations/${sessionId}/workflow`);
+  return data;
+}
+
+export async function downloadWorkflowPackage(sessionId: string) {
+  const { data } = await client.get(`/generate/conversations/${sessionId}/download`, {
+    responseType: "blob",
+  });
+  return data;
+}
