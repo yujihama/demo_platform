@@ -11,11 +11,22 @@ from .config import config_manager
 from .models.generation import GenerationRequest, GenerationResponse, GenerationStatusResponse
 from .services.jobs import job_registry
 from .services.pipeline import GenerationPipeline, pipeline
+from .services.workflow_pipeline import WorkflowGenerationPipeline, workflow_pipeline
 from .services.preview import MockPreviewService
+
+
+def _resolve_use_mock(payload: GenerationRequest) -> bool:
+    if payload.use_mock is not None:
+        return payload.use_mock
+    return config_manager.features.agents.use_mock
 
 
 def get_pipeline() -> GenerationPipeline:
     return pipeline
+
+
+def get_workflow_pipeline() -> WorkflowGenerationPipeline:
+    return workflow_pipeline
 
 
 preview_service = MockPreviewService(Path("mock/previews"))
@@ -28,9 +39,14 @@ router = APIRouter(prefix="/api", tags=["generation"])
 async def create_generation_job(
     payload: GenerationRequest,
     background_tasks: BackgroundTasks,
-    pipeline: GenerationPipeline = Depends(get_pipeline),
+    template_pipeline: GenerationPipeline = Depends(get_pipeline),
+    declarative_pipeline: WorkflowGenerationPipeline = Depends(get_workflow_pipeline),
 ) -> GenerationResponse:
-    job = pipeline.enqueue(payload, background_tasks)
+    use_mock = _resolve_use_mock(payload)
+    if use_mock:
+        job = template_pipeline.enqueue(payload, background_tasks)
+    else:
+        job = declarative_pipeline.enqueue(payload, background_tasks)
     return GenerationResponse(job_id=job.job_id, status=job.status)
 
 

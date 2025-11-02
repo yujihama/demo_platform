@@ -23,6 +23,15 @@ from ..services.llm_factory import llm_factory
 logger = logging.getLogger(__name__)
 
 
+STEP_DEFINITIONS: list[tuple[str, str]] = [
+    ("analysis", "要件分析"),
+    ("architecture", "アーキテクチャ設計"),
+    ("yaml_generation", "workflow.yaml生成"),
+    ("validation", "検証"),
+    ("packaging", "パッケージング"),
+]
+
+
 class WorkflowGenerationPipeline:
     """Pipeline for generating workflow.yaml using multi-agent LLM workflow."""
     
@@ -47,17 +56,26 @@ class WorkflowGenerationPipeline:
     ) -> GenerationJob:
         """Enqueue a workflow generation job."""
         job_id = str(uuid4())
-        step_definitions = [
-            ("analysis", "????"),
-            ("architecture", "?????????"),
-            ("yaml_generation", "YAML??"),
-            ("validation", "???????"),
-            ("packaging", "???????"),
-        ]
-        job = self._jobs.create_job(job_id, request, step_definitions)
+        job = self._jobs.create_job(job_id, request, STEP_DEFINITIONS)
         background_tasks.add_task(self._run_job, job.job_id, request)
         logger.info("Enqueued workflow generation job %s", job_id)
         return job
+
+    def run_sync(
+        self,
+        request: GenerationRequest,
+        progress_callback: Callable[[GenerationJob], None] | None = None,
+    ) -> GenerationJob:
+        """Execute the pipeline synchronously (used by CLI tests)."""
+        job_id = str(uuid4())
+        job = self._jobs.create_job(job_id, request, STEP_DEFINITIONS)
+        if progress_callback:
+            progress_callback(job)
+        self._run_job(job.job_id, request, progress_callback=progress_callback)
+        final_job = self._jobs.get(job_id)
+        if final_job is None:
+            raise RuntimeError("Workflow generation job finished without persisted state")
+        return final_job
     
     def _run_job(
         self,
@@ -80,13 +98,13 @@ class WorkflowGenerationPipeline:
                 step_id="analysis",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.RUNNING,
-                message="??????????",
+                message="ユーザー要件を解析しています",
             )
             self._notify(job_id, progress_callback)
             
             prompt = (request.requirements_prompt or request.description or "").strip()
             if not prompt:
-                raise ValueError("requirements_prompt ??? description ?????")
+                raise ValueError("requirements_prompt または description が必要です")
             
             llm = self._llm_factory.create_chat_model()
             retry_policy = self._llm_factory.get_retry_policy()
@@ -99,7 +117,7 @@ class WorkflowGenerationPipeline:
                 step_id="analysis",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.COMPLETED,
-                message="???????????",
+                message="要件分析が完了しました",
             )
             self._notify(job_id, progress_callback)
             
@@ -109,7 +127,7 @@ class WorkflowGenerationPipeline:
                 step_id="architecture",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.RUNNING,
-                message="???????????????",
+                message="workflow.yamlの構成を設計しています",
             )
             self._notify(job_id, progress_callback)
             
@@ -121,7 +139,7 @@ class WorkflowGenerationPipeline:
                 step_id="architecture",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.COMPLETED,
-                message="????????????????",
+                message="アーキテクチャ設計が完了しました",
             )
             self._notify(job_id, progress_callback)
             
@@ -131,7 +149,7 @@ class WorkflowGenerationPipeline:
                 step_id="yaml_generation",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.RUNNING,
-                message="workflow.yaml????????",
+                message="workflow.yamlを生成しています",
             )
             self._notify(job_id, progress_callback)
             
@@ -147,14 +165,14 @@ class WorkflowGenerationPipeline:
             )
             
             if not success:
-                raise RuntimeError(f"YAML?????????: {'; '.join(errors)}")
+                raise RuntimeError(f"YAMLの生成に失敗しました: {'; '.join(errors)}")
             
             self._jobs.update_status(
                 job_id,
                 step_id="yaml_generation",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.COMPLETED,
-                message="workflow.yaml??????????",
+                message="workflow.yamlの生成が完了しました",
             )
             self._notify(job_id, progress_callback)
             
@@ -164,14 +182,14 @@ class WorkflowGenerationPipeline:
                 step_id="validation",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.RUNNING,
-                message="?????????????????",
+                message="生成したYAMLを検証しています",
             )
             self._notify(job_id, progress_callback)
             
             validation_result = self._validator.validate_complete(yaml_content)
             if not validation_result["valid"]:
                 raise RuntimeError(
-                    f"??????????: {'; '.join(validation_result['all_errors'])}"
+                    f"YAMLの検証でエラーが発生しました: {'; '.join(validation_result['all_errors'])}"
                 )
             
             self._jobs.update_status(
@@ -179,7 +197,7 @@ class WorkflowGenerationPipeline:
                 step_id="validation",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.COMPLETED,
-                message="??????????????",
+                message="YAMLの検証が完了しました",
             )
             self._notify(job_id, progress_callback)
             
@@ -189,7 +207,7 @@ class WorkflowGenerationPipeline:
                 step_id="packaging",
                 job_status=JobStatus.PACKAGING,
                 step_status=StepStatus.RUNNING,
-                message="?????????????????????",
+                message="アプリケーションパッケージを作成しています",
             )
             self._notify(job_id, progress_callback)
             

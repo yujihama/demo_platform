@@ -15,15 +15,20 @@ export async function fetchJob(jobId: string) {
   return data;
 }
 
-export async function fetchPreview(specId: string) {
-  const { data } = await client.get(`/preview/${specId}`, {
-    responseType: 'text'
-  });
-  return data as string;
-}
-
 export async function fetchFeaturesConfig() {
   const { data } = await client.get<FeaturesConfig>('/config/features');
   return data;
+}
+
+export function buildDownloadUrl(path?: string | null) {
+  if (!path) return null;
+  if (/^https?:\/\//.test(path)) {
+    return path;
+  }
+  const backendBase = import.meta.env.VITE_BACKEND_URL;
+  if (backendBase && /^https?:\/\//.test(backendBase)) {
+    return new URL(path, backendBase.endsWith('/') ? backendBase : `${backendBase}/`).toString();
+  }
+  return path;
 }
 

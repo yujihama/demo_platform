@@ -54,5 +54,48 @@ export interface FeaturesConfig {
     use_mock: boolean;
     allow_llm_toggle: boolean;
   };
+  frontend?: {
+    polling_interval_seconds?: number;
+  };
+}
+
+export interface WorkflowRequirement {
+  id: string;
+  category: string;
+  title: string;
+  description: string;
+  acceptance_criteria: string[];
+}
+
+export interface WorkflowAnalysisMetadata {
+  summary: string;
+  primary_goal: string;
+  requirements: WorkflowRequirement[];
+}
+
+export interface WorkflowArchitectureMetadata {
+  info_section: Record<string, unknown>;
+  workflows_section: Record<string, Record<string, unknown>>;
+  ui_structure: Record<string, unknown>;
+  pipeline_structure: Record<string, unknown>[];
+  rationale: string;
+}
+
+export interface WorkflowValidationMetadata {
+  valid: boolean;
+  schema_valid?: boolean;
+  llm_valid?: boolean;
+  schema_errors?: string[];
+  llm_errors?: string[];
+  all_errors?: string[];
+  suggestions?: string[];
+  model?: Record<string, unknown> | null;
+}
+
+export interface WorkflowGenerationMetadata {
+  workflow_yaml?: string;
+  analysis?: WorkflowAnalysisMetadata;
+  architecture?: WorkflowArchitectureMetadata;
+  validation?: WorkflowValidationMetadata;
 }
 
