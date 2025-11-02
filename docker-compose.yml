@@ -15,7 +15,6 @@ services:
     volumes:
       - ./backend:/app
       - ./config:/app/config
-      - ./templates:/app/templates
       - ./output:/app/output
       - ./mock:/app/mock
       - ./workflow.yaml:/app/workflow.yaml:ro

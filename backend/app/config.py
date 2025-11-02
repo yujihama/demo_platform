@@ -35,11 +35,10 @@ class AgentSettings(BaseModel):
 
 class GenerationSettings(BaseModel):
     output_root: Path = Field(default=Path("./output"))
-    template_root: Path = Field(default=Path("./templates"))
     package_name_template: str = Field(default="invoice-verification")
     enable_playwright: bool = Field(default=True)
 
-    @validator("output_root", "template_root", pre=True)
+    @validator("output_root", pre=True)
     def _expand_root(cls, value: Any) -> Path:
         return Path(value).expanduser().resolve()
 

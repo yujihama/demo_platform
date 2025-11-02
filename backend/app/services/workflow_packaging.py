@@ -68,42 +68,30 @@ class WorkflowPackagingService:
         return """version: "3.9"
 
 services:
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    command: npm run dev -- --host 0.0.0.0 --port ${FRONTEND_PORT:-5173}
+  runtime-engine:
+    image: ghcr.io/demo-platform/runtime-engine:latest
     env_file:
       - .env
     environment:
-      BACKEND_HOST: http://backend:8000
+      WORKFLOW_FILE: ${WORKFLOW_FILE:-/app/workflow.yaml}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     volumes:
-      - ./frontend:/app
-      - node_modules:/app/node_modules
-    ports:
-      - "${FRONTEND_PORT:-5173}:5173"
-    depends_on:
-      - backend
-
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    command: uvicorn app.main:app --host 0.0.0.0 --port ${BACKEND_PORT:-8000}
-    env_file:
-      - .env
-    environment:
-      WORKFLOW_FILE: /app/workflow.yaml
-      REDIS_URL: redis://redis:6379/0
-      DIFY_API_ENDPOINT: http://dify-mock:3000/v1
-    volumes:
-      - ./backend:/app
       - ./workflow.yaml:/app/workflow.yaml:ro
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "${RUNTIME_ENGINE_PORT:-8000}:8000"
     depends_on:
       - redis
-      - dify-mock
+
+  runtime-ui:
+    image: ghcr.io/demo-platform/runtime-ui:latest
+    env_file:
+      - .env
+    environment:
+      BACKEND_URL: http://runtime-engine:8000
+    ports:
+      - "${RUNTIME_UI_PORT:-5173}:5173"
+    depends_on:
+      - runtime-engine
 
   redis:
     image: redis:7-alpine
@@ -112,44 +100,25 @@ services:
     volumes:
       - redis_data:/data
 
-  dify-mock:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    command: uvicorn app.mock_main:app --host 0.0.0.0 --port 3000
-    environment:
-      PYTHONPATH: /app
-    ports:
-      - "3000:3000"
-    depends_on:
-      - redis
-
 volumes:
-  node_modules: {}
   redis_data: {}
 """
     
     def _generate_env_example(self) -> str:
         """Generate .env.example template."""
-        return """# Backend Configuration
-BACKEND_PORT=8000
+        return """# Runtime Engine
 WORKFLOW_FILE=workflow.yaml
+RUNTIME_ENGINE_PORT=8000
 REDIS_URL=redis://redis:6379/0
 
-# Frontend Configuration
-FRONTEND_PORT=5173
+# Runtime UI
+RUNTIME_UI_PORT=5173
 
-# Redis Configuration
+# Redis
 REDIS_PORT=6379
 
-# Workflow Provider Configuration
-WORKFLOW_PROVIDER=mock
-# For production, set to 'dify' and configure:
+# Optional: configure when using Dify provider
 # WORKFLOW_PROVIDER=dify
-# DIFY_API_ENDPOINT=https://api.dify.ai/v1
-# DIFY_API_KEY=your-api-key-here
-
-# Dify API Configuration (if using dify provider)
 # DIFY_API_ENDPOINT=https://api.dify.ai/v1
 # DIFY_API_KEY=your-api-key-here
 """
@@ -160,40 +129,39 @@ WORKFLOW_PROVIDER=mock
 
 {description}
 
-## Setup
+## 必要条件
 
-1. Copy `.env.example` to `.env`:
+- Docker と Docker Compose が利用可能であること
+
+## セットアップ手順
+
+1. 環境変数ファイルを作成します。
    ```bash
    cp .env.example .env
    ```
 
-2. Edit `.env` and configure:
-   - Set `WORKFLOW_PROVIDER` to `dify` for production (or keep `mock` for development)
-   - If using Dify, add your `DIFY_API_KEY` and `DIFY_API_ENDPOINT`
+2. `.env` を編集し、必要に応じて以下を設定します。
+   - `WORKFLOW_FILE`: 配布された `workflow.yaml` のパス (既定値で問題ない場合は変更不要)
+   - `REDIS_URL`: Redis への接続先
+   - Dify を利用する場合は `WORKFLOW_PROVIDER`, `DIFY_API_ENDPOINT`, `DIFY_API_KEY`
 
-3. Start the application:
+3. サービスを起動します。
    ```bash
    docker-compose up -d
    ```
 
-4. Access the application:
-   - Frontend: http://localhost:5173
-   - Backend API: http://localhost:8000
+4. ブラウザでアプリケーションにアクセスします。
+   - UI: http://localhost:${{RUNTIME_UI_PORT:-5173}}
+   - 実行エンジン API: http://localhost:${{RUNTIME_ENGINE_PORT:-8000}}
 
-## Stopping the Application
+## 停止方法
 
 ```bash
 docker-compose down
 ```
 
-## Configuration
+## 仕組み
 
-The application behavior is controlled by `workflow.yaml`. 
-This file defines:
-- Application metadata
-- UI structure and components
-- Processing pipeline steps
-- External API endpoints (workflows)
-
-To modify the application, edit `workflow.yaml` and restart the services.
+`workflow.yaml` に記述された宣言的な設定をもとに、汎用実行エンジンと動的UIがアプリケーションを構成します。
+設定を変更した場合は、`docker-compose restart` で再起動してください。
 """

@@ -1,339 +1,258 @@
-import { useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useMemo, useState } from "react";
 import {
   Alert,
   Box,
   Button,
+  Chip,
   CircularProgress,
   Container,
+  Divider,
+  IconButton,
   Paper,
   Stack,
-  Step,
-  StepLabel,
-  Stepper,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableRow,
+  TextField,
   Typography
 } from "@mui/material";
+import RefreshIcon from "@mui/icons-material/Refresh";
+import DownloadIcon from "@mui/icons-material/Download";
 
-import { fetchWorkflowDefinition } from "./api";
-import { useWorkflowSession } from "./hooks/useWorkflowSession";
-import type { UIComponent, UIStep, WorkflowYaml } from "./types";
+import { downloadPackage } from "./api";
+import { useConversation } from "./hooks/useConversation";
 
-function resolvePath(source: Record<string, unknown> | undefined, path: string | undefined) {
-  if (!source || !path) return undefined;
-  const normalizedPath = path.startsWith("view.") ? path.slice("view.".length) : path;
-  const segments = normalizedPath.split(".");
-  let current: unknown = source;
-  for (const segment of segments) {
-    if (typeof current !== "object" || current === null) return undefined;
-    if (!(segment in current)) return undefined;
-    current = (current as Record<string, unknown>)[segment];
+function formatStatusLabel(status: string) {
+  switch (status) {
+    case "received":
+      return "受付";
+    case "spec_generating":
+      return "仕様生成中";
+    case "templates_rendering":
+      return "テンプレート処理";
+    case "packaging":
+      return "パッケージング";
+    case "completed":
+      return "完了";
+    case "failed":
+      return "失敗";
+    default:
+      return status;
   }
-  return current;
 }
 
-function toBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result;
-      if (typeof result === "string") {
-        const base64 = result.split(",")[1] ?? result;
-        resolve(base64);
-      } else {
-        reject(new Error("ファイルの読み込みに失敗しました"));
-      }
-    };
-    reader.onerror = () => reject(reader.error ?? new Error("ファイルの読み込みに失敗しました"));
-    reader.readAsDataURL(file);
-  });
+function MessageBubble({ role, content, timestamp }: { role: string; content: string; timestamp: string }) {
+  const isUser = role === "user";
+  const alignment = isUser ? "flex-end" : "flex-start";
+  const bgColor = isUser ? "primary.main" : "grey.200";
+  const textColor = isUser ? "primary.contrastText" : "text.primary";
+  return (
+    <Stack spacing={0.5} alignItems={alignment}>
+      <Typography variant="caption" color="text.secondary">
+        {role === "assistant" ? "LLM" : role === "user" ? "あなた" : "システム"} · {new Date(timestamp).toLocaleTimeString()}
+      </Typography>
+      <Box
+        sx={{
+          bgcolor: bgColor,
+          color: textColor,
+          px: 2,
+          py: 1.5,
+          borderRadius: 2,
+          maxWidth: "80%",
+          whiteSpace: "pre-wrap"
+        }}
+      >
+        {content}
+      </Box>
+    </Stack>
+  );
 }
 
 export default function App() {
-  const [workflow, setWorkflow] = useState<WorkflowYaml | null>(null);
-  const [workflowError, setWorkflowError] = useState<string | null>(null);
-  const [loadingWorkflow, setLoadingWorkflow] = useState(true);
-  const [activeStepIndex, setActiveStepIndex] = useState(0);
-  const [formValues, setFormValues] = useState<Record<string, unknown>>({});
+  const [userId, setUserId] = useState("demo-user");
+  const [projectId, setProjectId] = useState("invoice-workflow");
+  const [projectName, setProjectName] = useState("請求書抽出アプリ");
+  const [prompt, setPrompt] = useState("");
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
-  const { session, sessionId, loading: sessionLoading, error: sessionError, initialize, execute } = useWorkflowSession();
+  const { session, workflow, loading, error, start, refresh } = useConversation();
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoadingWorkflow(true);
-    fetchWorkflowDefinition()
-      .then((definition) => {
-        if (cancelled) return;
-        setWorkflow(definition);
-        setWorkflowError(null);
-      })
-      .catch((error) => {
-        console.error("Failed to load workflow definition", error);
-        setWorkflowError("workflow.yaml の読み込みに失敗しました。バックエンドを確認してください。");
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoadingWorkflow(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!workflow) return;
-    void initialize();
-  }, [workflow, initialize]);
-
-  const steps = useMemo(() => workflow?.ui?.steps ?? [], [workflow]);
-  const activeStep = steps[activeStepIndex];
-
-  useEffect(() => {
-    if (!session) return;
-    setFormValues({});
-    setActiveStepIndex(0);
-  }, [session?.session_id]);
-
-  const handleFileChange = async (componentId: string, fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0) {
-      setFormValues((prev) => {
-        const next = { ...prev };
-        delete next[componentId];
-        return next;
-      });
-      return;
-    }
-    const file = fileList[0];
-    const content = await toBase64(file);
-    setFormValues((prev) => ({
-      ...prev,
-      [componentId]: {
-        name: file.name,
-        content_type: file.type,
-        content
+  const handleSubmit = useCallback(
+    async (event: FormEvent) => {
+      event.preventDefault();
+      if (!prompt.trim()) {
+        return;
       }
-    }));
-  };
-
-  const handleSubmitStep = async (step: UIStep) => {
-    if (!sessionId) {
-      console.warn("Session not ready");
-      return;
-    }
-    const inputs: Record<string, unknown> = {};
-    step.components.forEach((component) => {
-      if (formValues[component.id] !== undefined) {
-        inputs[component.id] = formValues[component.id];
+      setDownloadError(null);
+      try {
+        await start({
+          user_id: userId || "demo-user",
+          project_id: projectId || "workflow-app",
+          project_name: projectName || "生成アプリ",
+          prompt: prompt.trim(),
+          description: prompt.trim()
+        });
+        setPrompt("");
+      } catch (err) {
+        // start() already sets error state
       }
-    });
-    try {
-      const result = await execute({ step_id: step.id, inputs });
-      if (result) {
-        const nextIndex = Math.min(activeStepIndex + 1, Math.max(steps.length - 1, 0));
-        setActiveStepIndex(nextIndex);
-      }
-    } catch (error) {
-      console.error("Failed to execute workflow", error);
-    }
-  };
-
-  const renderComponent = (component: UIComponent) => {
-    const props = component.props ?? {};
-    switch (component.type) {
-      case "file_upload": {
-        const accept = Array.isArray(props.accept) ? props.accept.join(",") : undefined;
-        return (
-          <Stack spacing={1} key={component.id}>
-            {props.label && (
-              <Typography variant="subtitle1" fontWeight={600}>
-                {String(props.label)}
-              </Typography>
-            )}
-            <Button variant="outlined" component="label">
-              ファイルを選択
-              <input
-                type="file"
-                hidden
-                accept={accept}
-                onChange={(event) => void handleFileChange(component.id, event.target.files)}
-              />
-            </Button>
-            {formValues[component.id] && typeof formValues[component.id] === "object" && (
-              <Typography variant="body2" color="text.secondary">
-                {(formValues[component.id] as { name?: string }).name ?? "ファイルが選択されました"}
-              </Typography>
-            )}
-          </Stack>
-        );
-      }
-      case "button": {
-        const action = props.action ?? "submit";
-        const label = typeof props.label === "string" ? props.label : "実行";
-        return (
-          <Button
-            key={component.id}
-            variant="contained"
-            size="large"
-            disabled={sessionLoading}
-            onClick={() => {
-              if (action === "submit" && activeStep) {
-                void handleSubmitStep(activeStep);
-              }
-            }}
-          >
-            {sessionLoading ? <CircularProgress size={20} color="inherit" /> : label}
-          </Button>
-        );
-      }
-      case "alert": {
-        const severity = typeof props.severity === "string" ? (props.severity as any) : "info";
-        const message = typeof props.message === "string" ? props.message : "";
-        return (
-          <Alert key={component.id} severity={severity} sx={{ whiteSpace: "pre-wrap" }}>
-            {message}
-          </Alert>
-        );
-      }
-      case "table": {
-        const dataPath = typeof props.data_path === "string" ? props.data_path : undefined;
-        const resolved = resolvePath(session?.view as Record<string, unknown>, dataPath);
-        const rows = Array.isArray(resolved)
-          ? (resolved as Array<Record<string, unknown>>)
-          : [];
-        const columns = Array.isArray(props.columns) ? (props.columns as Array<Record<string, unknown>>) : [];
-        return (
-          <Box key={component.id}>
-            {props.title && (
-              <Typography variant="h6" gutterBottom>
-                {String(props.title)}
-              </Typography>
-            )}
-            <Table size="small">
-              <TableHead>
-                <TableRow>
-                  {columns.map((column) => (
-                    <TableCell key={String(column.field)}>{String(column.label ?? column.field)}</TableCell>
-                  ))}
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {rows.map((row, rowIndex) => (
-                  <TableRow key={`${component.id}-${rowIndex}`}>
-                    {columns.map((column) => (
-                      <TableCell key={String(column.field)}>
-                        {String(row[column.field as string] ?? "-")}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </Box>
-        );
-      }
-      default:
-        return (
-          <Alert key={component.id} severity="warning">
-            未対応のコンポーネントタイプ: {component.type}
-          </Alert>
-        );
-    }
-  };
-
-  const header = (
-    <Stack spacing={1}>
-      <Typography variant="h4" fontWeight={700}>
-        {workflow?.info.name ?? "ワークフローデモ"}
-      </Typography>
-      {workflow?.info.description && (
-        <Typography variant="subtitle1" color="text.secondary">
-          {workflow.info.description}
-        </Typography>
-      )}
-    </Stack>
+    },
+    [prompt, userId, projectId, projectName, start]
   );
 
-  if (loadingWorkflow) {
-    return (
-      <Box sx={{ display: "flex", minHeight: "100vh", alignItems: "center", justifyContent: "center" }}>
-        <CircularProgress />
-      </Box>
-    );
-  }
+  const handleDownload = useCallback(async () => {
+    if (!session) return;
+    try {
+      const blob = await downloadPackage(session.session_id);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${projectId || "app"}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setDownloadError(null);
+    } catch (err) {
+      console.error("Failed to download package", err);
+      setDownloadError("パッケージのダウンロードに失敗しました");
+    }
+  }, [session, projectId]);
 
-  if (workflowError) {
-    return (
-      <Box sx={{ py: 6, bgcolor: "#f5f7fb", minHeight: "100vh" }}>
-        <Container maxWidth="md">
-          <Stack spacing={3}>
-            {header}
-            <Alert severity="error">{workflowError}</Alert>
-          </Stack>
-        </Container>
-      </Box>
-    );
-  }
+  const statusChip = useMemo(() => {
+    if (!session) return null;
+    const color = session.status === "failed" ? "error" : session.status === "completed" ? "success" : "default";
+    return <Chip label={formatStatusLabel(session.status)} color={color as any} />;
+  }, [session]);
 
   return (
-    <Box sx={{ py: 6, bgcolor: "#f5f7fb", minHeight: "100vh" }}>
+    <Box sx={{ minHeight: "100vh", bgcolor: "#f5f7fb", py: 6 }}>
       <Container maxWidth="md">
-        <Stack spacing={3}>
-          {header}
-          {sessionError && <Alert severity="error">{sessionError}</Alert>}
-          {session?.error && <Alert severity="error">{session.error}</Alert>}
+        <Stack spacing={4}>
+          <Stack spacing={1}>
+            <Typography variant="h4" fontWeight={700}>
+              宣言的アプリ生成デモ
+            </Typography>
+            <Typography variant="subtitle1" color="text.secondary">
+              LLM と対話しながら workflow.yaml を生成し、Docker パッケージとして取得できます。
+            </Typography>
+          </Stack>
 
-          {steps.length > 0 && (
-            <Paper variant="outlined" sx={{ p: 3 }}>
-              <Stepper activeStep={activeStepIndex} alternativeLabel>
-                {steps.map((step) => (
-                  <Step key={step.id}>
-                    <StepLabel>{step.title}</StepLabel>
-                  </Step>
-                ))}
-              </Stepper>
-            </Paper>
+          {(error || downloadError) && (
+            <Alert severity="error">{error ?? downloadError}</Alert>
           )}
 
-          {activeStep ? (
-            <Paper variant="outlined" sx={{ p: 4 }}>
-              <Stack spacing={3}>
-                <Box>
-                  <Typography variant="h5" fontWeight={600} gutterBottom>
-                    {activeStep.title}
-                  </Typography>
-                  {activeStep.description && (
-                    <Typography variant="body1" color="text.secondary">
-                      {activeStep.description}
-                    </Typography>
+          <Paper variant="outlined" sx={{ p: 3 }}>
+            <Stack component="form" spacing={2} onSubmit={handleSubmit}>
+              <Typography variant="h6" fontWeight={600}>
+                プロジェクト設定
+              </Typography>
+              <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+                <TextField
+                  label="ユーザーID"
+                  value={userId}
+                  onChange={(event) => setUserId(event.target.value)}
+                  fullWidth
+                  required
+                />
+                <TextField
+                  label="プロジェクトID"
+                  value={projectId}
+                  onChange={(event) => setProjectId(event.target.value)}
+                  fullWidth
+                  required
+                />
+              </Stack>
+              <TextField
+                label="プロジェクト名"
+                value={projectName}
+                onChange={(event) => setProjectName(event.target.value)}
+                required
+              />
+              <Divider sx={{ my: 1 }} />
+              <Typography variant="subtitle1" fontWeight={600}>
+                要件プロンプト
+              </Typography>
+              <TextField
+                label="例: 請求書からデータを抽出するアプリを作って"
+                multiline
+                minRows={3}
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+              />
+              <Stack direction="row" spacing={2} justifyContent="flex-end">
+                <Button
+                  type="submit"
+                  variant="contained"
+                  size="large"
+                  disabled={loading}
+                  startIcon={loading ? <CircularProgress size={18} color="inherit" /> : undefined}
+                >
+                  {loading ? "生成開始中" : "会話を開始"}
+                </Button>
+              </Stack>
+            </Stack>
+          </Paper>
+
+          <Paper variant="outlined" sx={{ p: 3, minHeight: 320 }}>
+            <Stack spacing={2} sx={{ height: "100%" }}>
+              <Stack direction="row" justifyContent="space-between" alignItems="center">
+                <Typography variant="h6" fontWeight={600}>
+                  チャット履歴
+                </Typography>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  {statusChip}
+                  {session && (
+                    <IconButton onClick={() => void refresh()} aria-label="refresh" size="small">
+                      <RefreshIcon fontSize="small" />
+                    </IconButton>
                   )}
-                </Box>
-                <Stack spacing={3}>{activeStep.components.map(renderComponent)}</Stack>
-                {activeStepIndex > 0 && (
-                  <Button variant="outlined" onClick={() => setActiveStepIndex(Math.max(activeStepIndex - 1, 0))}>
-                    戻る
-                  </Button>
+                </Stack>
+              </Stack>
+              <Divider />
+              <Stack spacing={2} sx={{ flexGrow: 1, overflowY: "auto" }}>
+                {session ? (
+                  session.messages.map((message) => (
+                    <MessageBubble
+                      key={`${message.timestamp}-${message.role}-${message.content.slice(0, 8)}`}
+                      role={message.role}
+                      content={message.content}
+                      timestamp={message.timestamp}
+                    />
+                  ))
+                ) : (
+                  <Alert severity="info">会話を開始するとここにメッセージが表示されます。</Alert>
                 )}
               </Stack>
-            </Paper>
-          ) : (
-            <Alert severity="info">workflow.yaml に UI ステップが定義されていません。</Alert>
-          )}
+            </Stack>
+          </Paper>
 
-          {session && (
-            <Paper variant="outlined" sx={{ p: 3 }}>
-              <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                セッション情報
-              </Typography>
-              <Stack spacing={1}>
-                <Typography variant="body2">セッションID: {session.session_id}</Typography>
-                <Typography variant="body2">ステータス: {session.status}</Typography>
+          <Paper variant="outlined" sx={{ p: 3 }}>
+            <Stack spacing={2}>
+              <Stack direction="row" justifyContent="space-between" alignItems="center">
+                <Typography variant="h6" fontWeight={600}>
+                  workflow.yaml プレビュー
+                </Typography>
+                <Button
+                  variant="contained"
+                  startIcon={<DownloadIcon />}
+                  disabled={!session || !session.workflow_ready}
+                  onClick={() => void handleDownload()}
+                >
+                  パッケージをダウンロード
+                </Button>
               </Stack>
-            </Paper>
-          )}
+              <Divider />
+              {workflow ? (
+                <Paper variant="outlined" sx={{ p: 2, maxHeight: 400, overflow: "auto", bgcolor: "grey.50" }}>
+                  <Typography component="pre" variant="body2" sx={{ m: 0, fontFamily: "monospace" }}>
+                    {workflow}
+                  </Typography>
+                </Paper>
+              ) : session ? (
+                <Alert severity="info">workflow.yaml が生成されるとプレビューが表示されます。</Alert>
+              ) : (
+                <Alert severity="info">会話を開始して workflow.yaml を生成してください。</Alert>
+              )}
+            </Stack>
+          </Paper>
         </Stack>
       </Container>
     </Box>

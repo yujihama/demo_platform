@@ -1,6 +1,13 @@
 # デモアプリケーション生成プラットフォーム
 
-Phase 1 (MVP) のためのフロントエンド・バックエンド・CLI・E2E テストを備えた生成プラットフォームです。LLM/Dify はモック実装で置き換え、UI/CLI の双方からテンプレートベースのアプリ生成フローを体験できます。さらに Phase 1 / 2 の成果物として、`workflow.yaml` を解釈して実行する汎用実行エンジンと動的 UI を統合しています。
+自然言語の要件から `workflow.yaml` を生成し、汎用実行エンジンと動的 UI が実行可能な Docker パッケージを出力するプラットフォームです。Phase 3 では LLM エージェントと宣言的実行エンジンを統合し、チャット UI からワンストップでアプリを体験できるようになりました。
+
+## 主な機能
+
+- **LLM 対話生成**: 「請求書からデータを抽出するアプリを作って」といった自然言語プロンプトをチャット UI で入力すると、エージェントが要件を分析して `workflow.yaml` を作成します。
+- **即時プレビュー**: 生成された `workflow.yaml` をブラウザ上で確認し、成果物に含まれる内容を把握できます。
+- **ワンクリック配布パッケージ**: `workflow.yaml`・配布用 `docker-compose.yml`・`.env.example`・README を含んだ zip をダウンロードできます。
+- **汎用実行エンジン**: ダウンロードしたパッケージを展開し `docker-compose up` するだけで、生成したアプリをブラウザで動作させられます。
 
 ## 必要要件
 
@@ -8,7 +15,7 @@ Phase 1 (MVP) のためのフロントエンド・バックエンド・CLI・E2E
 - Node.js 18 以上 (npm または yarn)
 - Docker / Docker Compose v2
 
-## 環境構築
+## 開発環境セットアップ
 
 1. ルートディレクトリで `.env.example` をコピーして `.env` を作成します。
 
@@ -40,33 +47,44 @@ Phase 1 (MVP) のためのフロントエンド・バックエンド・CLI・E2E
 
 バックエンドは `http://localhost:${BACKEND_PORT}` (デフォルト `8000`)、フロントエンドは `http://localhost:${FRONTEND_PORT}` (デフォルト `5173`) でアクセスできます。Redis は `localhost:${REDIS_PORT}`、Dify モックサーバーは `http://localhost:3000` に起動します。
 
-## 宣言的ワークフロー実行
+## 生成フローの使い方
 
-`workflow.yaml` に定義された UI / パイプラインを汎用実行エンジンが解釈します。
+1. ブラウザでフロントエンド (`http://localhost:5173`) にアクセスします。
+2. 「プロジェクト設定」にユーザー ID / プロジェクト ID / プロジェクト名を入力します。
+3. 要件プロンプトに自然言語で指示を入力し、「会話を開始」をクリックします。
+4. 画面中央のチャットに LLM の思考過程が表示され、workflow.yaml が完成するとプレビュー欄に内容が表示されます。
+5. 「パッケージをダウンロード」を押すと zip ファイルが取得できます。
 
-- フロントエンドは `/api/runtime/workflow` を読み取り、`ui.steps` に従ってウィザードを構築します。
-- ファイルアップロードなどの入力はセッション (`/api/runtime/sessions`) 経由でバックエンドに送信されます。
-- バックエンドは Redis にセッション状態を保存し、`call_workflow` コンポーネントで Dify / モック API を呼び出します。
-- 実行結果は `view.*` として公開され、UI コンポーネント（テーブル等）が動的に描画されます。
+ダウンロードした zip を展開し、同梱の README に従って `.env` を編集後、以下を実行すると生成アプリが立ち上がります。
 
-`workflow.yaml` を編集して `docker compose up` し直すだけで挙動を変更できます。モックサーバーは `http://localhost:3000/v1/workflows/<workflow_id>/run` を提供し、入力値をエコーした動的レスポンスを返します。
+```bash
+docker-compose up -d
+```
 
-## CLI 生成フロー
+## 汎用実行エンジンについて
 
-CLI からは `backend/cli.py` を利用して同一の生成パイプラインを実行できます。
+- フロントエンドは `/api/runtime/workflow` を読み取り、`ui.steps` に従ってウィザードを自動生成します。
+- 入力値は `/api/runtime/sessions` API を通じてステートフルに管理され、Redis に保存されます。
+- `pipeline.steps` では `call_workflow` や `file_uploader` などの汎用コンポーネントを組み合わせ、Dify / モック API と連携します。
+- `workflow.yaml` を更新して再起動するだけでアプリの挙動を変更できます。
+
+## CLI からの利用
+
+CLI でも同一の LLM パイプラインを実行できます。
 
 ```powershell
 python -m backend.cli generate --config config\examples\invoice.yaml
 ```
 
-生成結果は `output/<user_id>/<project_id>/` に Zip と `metadata.json` が出力されます。
+生成結果は `output/<user_id>/<project_id>/` に zip (`app.zip`) と `metadata.json` が出力されます。
 
-## テンプレートとモックデータ
+## リポジトリ構成
 
-- テンプレート: `templates/`
-- モック仕様書: `mock/specs/`
-- 宣言的ワークフロー: `workflow.yaml`
-- 生成成果物: `output/`
+- `backend/` … FastAPI ベースの生成 API・runtime API
+- `frontend/` … LLM 対話 UI (Vite + React + MUI)
+- `mock/` … モック仕様書および Dify モックサーバー
+- `output/` … 生成済みパッケージの格納先
+- `workflow.yaml` … 汎用実行エンジンが読み込む宣言的設定
 
 ## テスト
 
@@ -81,5 +99,3 @@ PowerShell スクリプト `scripts\run-e2e.ps1` で UI/CLI テストと生成�
 ```powershell
 pwsh scripts\run-e2e.ps1
 ```
-
-

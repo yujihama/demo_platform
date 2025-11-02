@@ -42,6 +42,7 @@ class MockStructuredChatModel:
         self._validation_attempts = 0
         self._force_retry = False
         self._force_failure = False
+        self._workflow_architecture: Dict[str, Any] | None = None
 
     def with_structured_output(self, output_model: Any) -> Any:  # noqa: ANN401
         outer = self
@@ -49,6 +50,9 @@ class MockStructuredChatModel:
         class _MockRunnable:
             def invoke(self, prompt_value: Any) -> Any:  # noqa: ANN401
                 return outer._invoke(output_model, prompt_value)
+
+            def __call__(self, prompt_value: Any) -> Any:  # noqa: ANN401
+                return self.invoke(prompt_value)
 
         return _MockRunnable()
 
@@ -67,6 +71,17 @@ class MockStructuredChatModel:
             return output_model(**self._build_data_flow())
         if name == "ValidationResult":
             return output_model(**self._build_validation())
+        if name == "WorkflowAnalysisResult":
+            return output_model(**self._build_requirements(text))
+        if name == "WorkflowArchitectureResult":
+            architecture = self._build_workflow_architecture()
+            self._workflow_architecture = architecture
+            return output_model(**architecture)
+        if name == "WorkflowYamlResult":
+            yaml_content = self._build_workflow_yaml()
+            return output_model(workflow_yaml=yaml_content)
+        if name == "WorkflowValidationResult":
+            return output_model(valid=True, errors=[], suggestions=[])
         raise ValueError(f"Unsupported mock structured output model: {name}")
 
     @staticmethod
@@ -182,13 +197,13 @@ class MockStructuredChatModel:
                 {
                     "component_id": "text_input",
                     "slot": "main",
-                    "props": {"label": "Record ID", "binding": "record_id", "required": True},
+                    "props": {"label": "Record ID", "binding": "record_id", "required": "true"},
                     "fulfills": ["VAL-1"],
                 },
                 {
                     "component_id": "text_input",
                     "slot": "main",
-                    "props": {"label": "Description", "binding": "description", "required": False},
+                    "props": {"label": "Description", "binding": "description", "required": "false"},
                     "fulfills": ["VAL-1"],
                 },
                 {
@@ -212,7 +227,7 @@ class MockStructuredChatModel:
                     "props": {
                         "label": "Invoice File",
                         "binding": "invoice_file",
-                        "accept": ["application/pdf", "image/png"],
+                        "accept": "application/pdf,image/png",
                     },
                     "fulfills": ["REQ-1"],
                 },
@@ -302,6 +317,129 @@ class MockStructuredChatModel:
 
         self._validation_attempts += 1
         return {"success": True, "errors": []}
+
+    def _build_workflow_architecture(self) -> Dict[str, Any]:
+        info_section = {
+            "name": "自動化ワークフロー",
+            "description": self._last_prompt or "LLMが生成したワークフロー",
+            "version": "1.0.0",
+        }
+        workflows_section = {
+            "main": {
+                "provider": "mock",
+                "endpoint": "http://dify-mock:3000/v1/workflows/main",
+                "api_key_env": "DIFY_API_KEY",
+            }
+        }
+        ui_structure = {
+            "layout": "wizard",
+            "steps": [
+                {
+                    "id": "upload",
+                    "title": "ドキュメントのアップロード",
+                    "description": "請求書ファイルをアップロードし、処理を開始します。",
+                    "components": [
+                        {
+                            "type": "file_upload",
+                            "id": "invoice_file",
+                            "props": {
+                                "label": "請求書ファイル",
+                                "accept": [
+                                    "application/pdf",
+                                    "image/png",
+                                ],
+                            },
+                        },
+                        {
+                            "type": "button",
+                            "id": "run_workflow",
+                            "props": {
+                                "label": "ワークフローを実行",
+                                "action": "submit",
+                            },
+                        },
+                    ],
+                }
+            ],
+        }
+        pipeline_structure = [
+            {
+                "id": "upload_invoice",
+                "component": "file_uploader",
+                "params": {
+                    "input": "invoice_file",
+                },
+            },
+            {
+                "id": "process_invoice",
+                "component": "call_workflow",
+                "params": {
+                    "workflow": "main",
+                    "inputs": {
+                        "file": "@input.invoice_file",
+                    },
+                },
+            },
+        ]
+        return {
+            "info_section": info_section,
+            "workflows_section": workflows_section,
+            "ui_structure": ui_structure,
+            "pipeline_structure": pipeline_structure,
+            "rationale": "テンプレート化されたモックレスポンス",
+        }
+
+    def _build_workflow_yaml(self) -> str:
+        architecture = self._workflow_architecture or self._build_workflow_architecture()
+        info = architecture["info_section"]
+        ui = architecture["ui_structure"]
+        workflows = architecture["workflows_section"]
+
+        ui_step = ui["steps"][0]
+        return "\n".join(
+            [
+                "info:",
+                f"  name: {info['name']}",
+                f"  description: {info['description']}",
+                f"  version: {info['version']}",
+                "workflows:",
+                "  main:",
+                f"    provider: {workflows['main']['provider']}",
+                f"    endpoint: {workflows['main']['endpoint']}",
+                f"    api_key_env: {workflows['main']['api_key_env']}",
+                "ui:",
+                f"  layout: {ui['layout']}",
+                "  steps:",
+                f"    - id: {ui_step['id']}",
+                f"      title: {ui_step['title']}",
+                f"      description: {ui_step['description']}",
+                "      components:",
+                "        - type: file_upload",
+                "          id: invoice_file",
+                "          props:",
+                "            label: 請求書ファイル",
+                "            accept:",
+                "              - application/pdf",
+                "              - image/png",
+                "        - type: button",
+                "          id: run_workflow",
+                "          props:",
+                "            label: ワークフローを実行",
+                "            action: submit",
+                "pipeline:",
+                "  steps:",
+                "    - id: upload_invoice",
+                "      component: file_uploader",
+                "      params:",
+                "        input: invoice_file",
+                "    - id: process_invoice",
+                "      component: call_workflow",
+                "      params:",
+                "        workflow: main",
+                "        inputs:",
+                "          file: '@input.invoice_file'",
+            ]
+        )
 
     @staticmethod
     def _parse_user_prompt(section: str) -> str:
