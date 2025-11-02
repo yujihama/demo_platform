@@ -21,13 +21,12 @@ from .models.generation import (
 )
 from .services.conversation_storage import conversation_storage
 from .services.jobs import job_registry
-from .services.pipeline import GenerationPipeline, pipeline
 from .services.preview import MockPreviewService
-from .services.workflow_pipeline import workflow_pipeline
+from .services.workflow_pipeline import WorkflowGenerationPipeline, workflow_pipeline
 
 
-def get_pipeline() -> GenerationPipeline:
-    return pipeline
+def get_pipeline() -> WorkflowGenerationPipeline:
+    return workflow_pipeline
 
 
 preview_service = MockPreviewService(Path("mock/previews"))
@@ -40,7 +39,7 @@ router = APIRouter(prefix="/api", tags=["generation"])
 async def create_generation_job(
     payload: GenerationRequest,
     background_tasks: BackgroundTasks,
-    pipeline: GenerationPipeline = Depends(get_pipeline),
+    pipeline: WorkflowGenerationPipeline = Depends(get_pipeline),
 ) -> GenerationResponse:
     job = pipeline.enqueue(payload, background_tasks)
     return GenerationResponse(job_id=job.job_id, status=job.status)
