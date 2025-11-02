@@ -12,7 +12,8 @@ from playwright.sync_api import Page
 from .utils.process import ManagedProcess, start_backend, start_frontend
 
 # Get the workspace root directory
-WORKSPACE_ROOT = Path(__file__).parent.parent.parent
+# ruff: noqa: F821 - __file__ is available at runtime
+WORKSPACE_ROOT: Path = Path(__file__).parent.parent.parent  # noqa: F821
 
 
 @pytest.fixture(scope="session")
