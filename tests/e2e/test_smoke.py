@@ -1,6 +1,6 @@
 from playwright.sync_api import Page, expect
 
-def test_smoke(page_with_base_url: Page):
+def test_smoke(prepare_environment, page_with_base_url: Page):
     """Smoke test to verify basic functionality of the application."""
     # Check if the main page loads correctly
     expect(page_with_base_url.locator("h1")).to_have_text("Demo Platform")
