@@ -1,5 +1,13 @@
 import axios from "axios";
-import type { SessionExecuteRequest, WorkflowSessionResponse, WorkflowYaml } from "./types";
+import type {
+  ConversationCreateRequest,
+  ConversationCreateResponse,
+  ConversationStatusResponse,
+  PackageMetadata,
+  SessionExecuteRequest,
+  WorkflowSessionResponse,
+  WorkflowYaml
+} from "./types";
 
 const baseURL =
   import.meta.env.VITE_WORKFLOW_API ??
@@ -28,4 +36,33 @@ export async function executeWorkflowSession(sessionId: string, payload: Session
 export async function fetchWorkflowSession(sessionId: string) {
   const { data } = await client.get<WorkflowSessionResponse>(`/runtime/sessions/${sessionId}`);
   return data;
+}
+
+export async function startConversation(payload: ConversationCreateRequest) {
+  const { data } = await client.post<ConversationCreateResponse>("/generate/conversations", payload);
+  return data;
+}
+
+export async function fetchConversationStatus(sessionId: string) {
+  const { data } = await client.get<ConversationStatusResponse>(`/generate/conversations/${sessionId}`);
+  return data;
+}
+
+export async function fetchConversationWorkflow(sessionId: string) {
+  const { data } = await client.get(`/generate/conversations/${sessionId}/workflow`, {
+    responseType: "text"
+  });
+  return data as string;
+}
+
+export async function fetchConversationPackage(sessionId: string) {
+  const { data } = await client.get<PackageMetadata>(`/generate/conversations/${sessionId}/package`);
+  return data;
+}
+
+export async function downloadConversationPackage(sessionId: string) {
+  const response = await client.get<ArrayBuffer>(`/generate/conversations/${sessionId}/package/download`, {
+    responseType: "arraybuffer"
+  });
+  return response.data;
 }

@@ -15,7 +15,8 @@ from ..agents.workflow_agents import (
     YAMLSpecialistAgent,
 )
 from ..services.workflow_validator import SelfCorrectionLoop, WorkflowValidator
-from ..services.workflow_packaging import WorkflowPackagingService
+from ..services.workflow_packaging import WorkflowPackageArtifact, WorkflowPackagingService
+from .conversation_sessions import ConversationSessionManager, conversation_sessions
 from ..models.generation import GenerationJob, GenerationRequest, JobStatus, StepStatus
 from ..services.jobs import JobRegistry, job_registry
 from ..services.llm_factory import llm_factory
@@ -31,14 +32,16 @@ class WorkflowGenerationPipeline:
         jobs: JobRegistry = job_registry,
         working_root: Path = Path("generated"),
         output_root: Path = Path("output"),
+        session_manager: ConversationSessionManager | None = None,
     ) -> None:
         self._jobs = jobs
         self._working_root = working_root
         self._working_root.mkdir(parents=True, exist_ok=True)
-        
+
         self._llm_factory = llm_factory
         self._validator = WorkflowValidator(llm_factory)
         self._packaging = WorkflowPackagingService(output_root)
+        self._session_manager = session_manager
     
     def enqueue(
         self,
@@ -55,6 +58,8 @@ class WorkflowGenerationPipeline:
             ("packaging", "???????"),
         ]
         job = self._jobs.create_job(job_id, request, step_definitions)
+        if self._session_manager:
+            self._session_manager.update_progress(job_id, JobStatus.RECEIVED, "ジョブを登録しました")
         background_tasks.add_task(self._run_job, job.job_id, request)
         logger.info("Enqueued workflow generation job %s", job_id)
         return job
@@ -82,6 +87,8 @@ class WorkflowGenerationPipeline:
                 step_status=StepStatus.RUNNING,
                 message="??????????",
             )
+            if self._session_manager:
+                self._session_manager.update_progress(job_id, JobStatus.SPEC_GENERATING, "要件を分析しています")
             self._notify(job_id, progress_callback)
             
             prompt = (request.requirements_prompt or request.description or "").strip()
@@ -111,6 +118,8 @@ class WorkflowGenerationPipeline:
                 step_status=StepStatus.RUNNING,
                 message="???????????????",
             )
+            if self._session_manager:
+                self._session_manager.update_progress(job_id, JobStatus.SPEC_GENERATING, "アーキテクチャを設計しています")
             self._notify(job_id, progress_callback)
             
             architect = ArchitectAgent(llm, retry_policy)
@@ -133,6 +142,8 @@ class WorkflowGenerationPipeline:
                 step_status=StepStatus.RUNNING,
                 message="workflow.yaml????????",
             )
+            if self._session_manager:
+                self._session_manager.update_progress(job_id, JobStatus.SPEC_GENERATING, "workflow.yaml を生成しています")
             self._notify(job_id, progress_callback)
             
             correction_loop = SelfCorrectionLoop(
@@ -166,6 +177,8 @@ class WorkflowGenerationPipeline:
                 step_status=StepStatus.RUNNING,
                 message="?????????????????",
             )
+            if self._session_manager:
+                self._session_manager.update_progress(job_id, JobStatus.SPEC_GENERATING, "生成物を検証しています")
             self._notify(job_id, progress_callback)
             
             validation_result = self._validator.validate_complete(yaml_content)
@@ -191,6 +204,8 @@ class WorkflowGenerationPipeline:
                 step_status=StepStatus.RUNNING,
                 message="?????????????????????",
             )
+            if self._session_manager:
+                self._session_manager.update_progress(job_id, JobStatus.PACKAGING, "パッケージを作成しています")
             self._notify(job_id, progress_callback)
             
             job_snapshot = self._jobs.get(job_id)
@@ -209,14 +224,21 @@ class WorkflowGenerationPipeline:
                 "validation": validation_metadata,
             }
             
-            zip_path = self._packaging.package_workflow_app(
+            package_artifact: WorkflowPackageArtifact = self._packaging.package_workflow_app(
                 job_snapshot,
                 yaml_content,
                 metadata,
             )
-            
+
             download_url = f"/api/generate/{job_id}/download"
-            self._jobs.complete(job_id, download_url, metadata, str(zip_path))
+            self._jobs.complete(job_id, download_url, metadata, str(package_artifact.zip_path))
+            if self._session_manager:
+                self._session_manager.complete_session(
+                    job_id,
+                    workflow_yaml=yaml_content,
+                    package_path=package_artifact.zip_path,
+                    metadata_path=package_artifact.metadata_path,
+                )
             self._notify(job_id, progress_callback)
             
             logger.info("Workflow generation job %s completed", job_id)
@@ -224,6 +246,8 @@ class WorkflowGenerationPipeline:
         except Exception as exc:
             logger.exception("Workflow generation job %s failed", job_id)
             self._jobs.fail(job_id, str(exc))
+            if self._session_manager:
+                self._session_manager.fail_session(job_id, str(exc))
             self._notify(job_id, progress_callback)
         finally:
             import shutil
@@ -242,4 +266,4 @@ class WorkflowGenerationPipeline:
 
 
 # Create singleton instance
-workflow_pipeline = WorkflowGenerationPipeline()
+workflow_pipeline = WorkflowGenerationPipeline(session_manager=conversation_sessions)

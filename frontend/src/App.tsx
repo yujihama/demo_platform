@@ -1,10 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Box,
   Button,
+  Chip,
   CircularProgress,
   Container,
+  Divider,
+  List,
+  ListItem,
+  ListItemText,
   Paper,
   Stack,
   Step,
@@ -15,12 +20,30 @@ import {
   TableCell,
   TableHead,
   TableRow,
+  TextField,
   Typography
 } from "@mui/material";
 
-import { fetchWorkflowDefinition } from "./api";
+import dayjs from "dayjs";
+
+import {
+  downloadConversationPackage,
+  fetchConversationPackage,
+  fetchConversationStatus,
+  fetchConversationWorkflow,
+  fetchWorkflowDefinition,
+  startConversation
+} from "./api";
 import { useWorkflowSession } from "./hooks/useWorkflowSession";
-import type { UIComponent, UIStep, WorkflowYaml } from "./types";
+import type {
+  ConversationMessage,
+  GenerationJobStatus,
+  JobStep,
+  PackageMetadata,
+  UIComponent,
+  UIStep,
+  WorkflowYaml
+} from "./types";
 
 function resolvePath(source: Record<string, unknown> | undefined, path: string | undefined) {
   if (!source || !path) return undefined;
@@ -58,6 +81,112 @@ export default function App() {
   const [loadingWorkflow, setLoadingWorkflow] = useState(true);
   const [activeStepIndex, setActiveStepIndex] = useState(0);
   const [formValues, setFormValues] = useState<Record<string, unknown>>({});
+  const [prompt, setPrompt] = useState("");
+  const [conversationSessionId, setConversationSessionId] = useState<string | null>(null);
+  const [conversationStatus, setConversationStatus] = useState<GenerationJobStatus | null>(null);
+  const [conversationMessages, setConversationMessages] = useState<ConversationMessage[]>([]);
+  const [conversationSteps, setConversationSteps] = useState<JobStep[]>([]);
+  const [workflowPreview, setWorkflowPreview] = useState<string | null>(null);
+  const [packageInfo, setPackageInfo] = useState<PackageMetadata | null>(null);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [downloadingPackage, setDownloadingPackage] = useState(false);
+  const [artifactsFetchedFor, setArtifactsFetchedFor] = useState<string | null>(null);
+  const statusLabelMap: Record<GenerationJobStatus, string> = {
+    received: "受付済み",
+    spec_generating: "仕様生成中",
+    templates_rendering: "テンプレート生成中",
+    packaging: "パッケージング中",
+    completed: "完了",
+    failed: "失敗"
+  };
+  const statusColorMap: Record<GenerationJobStatus, "default" | "info" | "warning" | "success" | "error"> = {
+    received: "default",
+    spec_generating: "info",
+    templates_rendering: "info",
+    packaging: "warning",
+    completed: "success",
+    failed: "error"
+  };
+  const stepStatusLabel: Record<JobStep["status"], string> = {
+    pending: "待機中",
+    running: "実行中",
+    completed: "完了",
+    failed: "失敗"
+  };
+  const stepStatusColor: Record<JobStep["status"], "default" | "info" | "success" | "error"> = {
+    pending: "default",
+    running: "info",
+    completed: "success",
+    failed: "error"
+  };
+
+  const formatFileSize = useCallback((bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  }, []);
+
+  const handleStartConversation = useCallback(async () => {
+    const trimmed = prompt.trim();
+    if (!trimmed) {
+      setGenerationError("プロンプトを入力してください。");
+      return;
+    }
+    setIsGenerating(true);
+    setGenerationError(null);
+    setConversationMessages([]);
+    setConversationSteps([]);
+    setWorkflowPreview(null);
+    setPackageInfo(null);
+    setArtifactsFetchedFor(null);
+    setConversationSessionId(null);
+    setConversationStatus(null);
+
+    const timestamp = Date.now();
+    const projectId = `project-${timestamp}`;
+    const projectName = trimmed.slice(0, 30) || "生成アプリ";
+
+    try {
+      const response = await startConversation({
+        user_id: "demo-user",
+        project_id: projectId,
+        project_name: projectName,
+        prompt: trimmed,
+        description: trimmed
+      });
+      setConversationSessionId(response.session_id);
+      setConversationStatus(response.status);
+      setConversationMessages(response.messages);
+    } catch (error) {
+      console.error("Failed to start conversation", error);
+      setGenerationError("生成セッションの作成に失敗しました。");
+    } finally {
+      setIsGenerating(false);
+    }
+  }, [prompt]);
+
+  const handleDownloadPackage = useCallback(async () => {
+    if (!conversationSessionId) return;
+    setDownloadingPackage(true);
+    try {
+      const data = await downloadConversationPackage(conversationSessionId);
+      const blob = new Blob([data], { type: "application/zip" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = packageInfo?.filename ?? "app.zip";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Failed to download package", error);
+      setGenerationError("パッケージのダウンロードに失敗しました。");
+    } finally {
+      setDownloadingPackage(false);
+    }
+  }, [conversationSessionId, packageInfo?.filename]);
 
   const { session, sessionId, loading: sessionLoading, error: sessionError, initialize, execute } = useWorkflowSession();
 
@@ -88,6 +217,66 @@ export default function App() {
     if (!workflow) return;
     void initialize();
   }, [workflow, initialize]);
+
+  useEffect(() => {
+    if (!conversationSessionId) return;
+
+    let cancelled = false;
+
+    const refreshStatus = async () => {
+      try {
+        const status = await fetchConversationStatus(conversationSessionId);
+        if (cancelled) return;
+        setConversationStatus(status.status);
+        setConversationMessages(status.messages);
+        setConversationSteps(status.steps);
+
+        if (status.status === "completed" && artifactsFetchedFor !== conversationSessionId) {
+          try {
+            const [workflowContent, packageMeta] = await Promise.all([
+              fetchConversationWorkflow(conversationSessionId),
+              fetchConversationPackage(conversationSessionId).catch(() => null)
+            ]);
+            if (cancelled) return;
+            setWorkflowPreview(workflowContent);
+            setPackageInfo(packageMeta ?? null);
+            setArtifactsFetchedFor(conversationSessionId);
+          } catch (error) {
+            console.error("Failed to fetch generated artifacts", error);
+            if (!cancelled) {
+              setGenerationError("生成物の取得に失敗しました。");
+            }
+          }
+        }
+
+        if (status.status === "failed") {
+          const lastMessage = status.messages[status.messages.length - 1];
+          if (lastMessage?.role === "assistant") {
+            setGenerationError(lastMessage.content);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to fetch conversation status", error);
+      }
+    };
+
+    void refreshStatus();
+
+    if (conversationStatus === "completed" || conversationStatus === "failed") {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const timer = window.setInterval(() => {
+      void refreshStatus();
+    }, 2500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [conversationSessionId, conversationStatus, artifactsFetchedFor]);
 
   const steps = useMemo(() => workflow?.ui?.steps ?? [], [workflow]);
   const activeStep = steps[activeStepIndex];
@@ -146,11 +335,13 @@ export default function App() {
     switch (component.type) {
       case "file_upload": {
         const accept = Array.isArray(props.accept) ? props.accept.join(",") : undefined;
+        const value = formValues[component.id];
+        const fileInfo = typeof value === "object" && value !== null ? (value as { name?: string }) : null;
         return (
           <Stack spacing={1} key={component.id}>
-            {props.label && (
+            {typeof props.label === "string" && (
               <Typography variant="subtitle1" fontWeight={600}>
-                {String(props.label)}
+                {props.label}
               </Typography>
             )}
             <Button variant="outlined" component="label">
@@ -162,9 +353,9 @@ export default function App() {
                 onChange={(event) => void handleFileChange(component.id, event.target.files)}
               />
             </Button>
-            {formValues[component.id] && typeof formValues[component.id] === "object" && (
+            {fileInfo && (
               <Typography variant="body2" color="text.secondary">
-                {(formValues[component.id] as { name?: string }).name ?? "ファイルが選択されました"}
+                {fileInfo.name ?? "ファイルが選択されました"}
               </Typography>
             )}
           </Stack>
@@ -207,9 +398,9 @@ export default function App() {
         const columns = Array.isArray(props.columns) ? (props.columns as Array<Record<string, unknown>>) : [];
         return (
           <Box key={component.id}>
-            {props.title && (
+            {typeof props.title === "string" && (
               <Typography variant="h6" gutterBottom>
-                {String(props.title)}
+                {props.title}
               </Typography>
             )}
             <Table size="small">
@@ -282,6 +473,124 @@ export default function App() {
     <Box sx={{ py: 6, bgcolor: "#f5f7fb", minHeight: "100vh" }}>
       <Container maxWidth="md">
         <Stack spacing={3}>
+          <Paper variant="outlined" sx={{ p: 3 }}>
+            <Stack spacing={2}>
+              <Typography variant="h5" fontWeight={600}>
+                アプリ生成チャット
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                自然言語で要件を入力すると、workflow.yaml と Docker パッケージを生成します。
+              </Typography>
+              <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems="stretch">
+                <TextField
+                  fullWidth
+                  multiline
+                  minRows={2}
+                  label="アプリの要件"
+                  placeholder="請求書からデータを抽出するアプリを作って"
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                />
+                <Button
+                  variant="contained"
+                  color="primary"
+                  disabled={isGenerating}
+                  sx={{ minWidth: { sm: 140 }, alignSelf: { xs: "stretch", sm: "flex-end" } }}
+                  onClick={() => void handleStartConversation()}
+                >
+                  {isGenerating ? <CircularProgress size={20} color="inherit" /> : "送信"}
+                </Button>
+              </Stack>
+              {generationError && <Alert severity="error">{generationError}</Alert>}
+              {conversationStatus && (
+                <Chip
+                  label={`ステータス: ${statusLabelMap[conversationStatus]}`}
+                  color={statusColorMap[conversationStatus]}
+                  sx={{ alignSelf: "flex-start" }}
+                />
+              )}
+              {conversationMessages.length > 0 && (
+                <Stack spacing={1}>
+                  {conversationMessages.map((message, index) => (
+                    <Box
+                      key={`${message.timestamp}-${index}`}
+                      sx={{
+                        p: 1.5,
+                        borderRadius: 1,
+                        bgcolor:
+                          message.role === "user"
+                            ? "primary.50"
+                            : message.role === "assistant"
+                            ? "success.50"
+                            : "grey.100"
+                      }}
+                    >
+                      <Typography variant="caption" color="text.secondary">
+                        {message.role === "user" ? "ユーザー" : message.role === "assistant" ? "アシスタント" : "システム"}
+                        {" ・ "}
+                        {dayjs(message.timestamp).format("HH:mm:ss")}
+                      </Typography>
+                      <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
+                        {message.content}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Stack>
+              )}
+              {conversationSteps.length > 0 && (
+                <Box>
+                  <Divider sx={{ my: 2 }} />
+                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                    処理ステップ
+                  </Typography>
+                  <List dense disablePadding>
+                    {conversationSteps.map((step) => (
+                      <ListItem
+                        key={step.id}
+                        disableGutters
+                        secondaryAction={
+                          <Chip size="small" label={stepStatusLabel[step.status]} color={stepStatusColor[step.status]} />
+                        }
+                      >
+                        <ListItemText
+                          primary={step.label}
+                          secondary={step.message ?? undefined}
+                          primaryTypographyProps={{ variant: "body2" }}
+                          secondaryTypographyProps={{ variant: "caption", sx: { whiteSpace: "pre-wrap" } }}
+                        />
+                      </ListItem>
+                    ))}
+                  </List>
+                </Box>
+              )}
+              {workflowPreview && (
+                <Paper variant="outlined" sx={{ p: 2, bgcolor: "grey.50" }}>
+                  <Typography variant="subtitle2" gutterBottom>
+                    生成された workflow.yaml プレビュー
+                  </Typography>
+                  <Box component="pre" sx={{ maxHeight: 280, overflow: "auto", fontSize: 13, m: 0 }}>
+                    {workflowPreview}
+                  </Box>
+                </Paper>
+              )}
+              {packageInfo && (
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems="center">
+                  <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
+                    パッケージ: {packageInfo.filename}（{formatFileSize(packageInfo.size_bytes)}）
+                  </Typography>
+                  <Button
+                    variant="contained"
+                    color="secondary"
+                    disabled={downloadingPackage}
+                    onClick={() => void handleDownloadPackage()}
+                  >
+                    {downloadingPackage ? <CircularProgress size={20} color="inherit" /> : "ダウンロード"}
+                  </Button>
+                </Stack>
+              )}
+            </Stack>
+          </Paper>
+
           {header}
           {sessionError && <Alert severity="error">{sessionError}</Alert>}
           {session?.error && <Alert severity="error">{session.error}</Alert>}

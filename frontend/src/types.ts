@@ -63,3 +63,53 @@ export interface SessionExecuteRequest {
   step_id?: string | null;
   inputs: Record<string, unknown>;
 }
+
+export type GenerationJobStatus =
+  | "received"
+  | "spec_generating"
+  | "templates_rendering"
+  | "packaging"
+  | "completed"
+  | "failed";
+
+export interface ConversationMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+  timestamp: string;
+}
+
+export interface ConversationCreateRequest {
+  user_id: string;
+  project_id: string;
+  project_name: string;
+  prompt: string;
+  description?: string;
+}
+
+export interface ConversationCreateResponse {
+  session_id: string;
+  status: GenerationJobStatus;
+  messages: ConversationMessage[];
+}
+
+export interface ConversationStatusResponse {
+  session_id: string;
+  status: GenerationJobStatus;
+  messages: ConversationMessage[];
+  steps: JobStep[];
+  download_url?: string | null;
+}
+
+export interface JobStep {
+  id: string;
+  label: string;
+  status: "pending" | "running" | "completed" | "failed";
+  message?: string | null;
+}
+
+export interface PackageMetadata {
+  session_id: string;
+  filename: string;
+  size_bytes: number;
+  updated_at: string;
+}
