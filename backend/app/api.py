@@ -11,11 +11,19 @@ from .config import config_manager
 from .models.generation import GenerationRequest, GenerationResponse, GenerationStatusResponse
 from .services.jobs import job_registry
 from .services.pipeline import GenerationPipeline, pipeline
+from .services.workflow_pipeline import (
+    WorkflowGenerationPipeline,
+    workflow_pipeline as workflow_generation_pipeline,
+)
 from .services.preview import MockPreviewService
 
 
 def get_pipeline() -> GenerationPipeline:
     return pipeline
+
+
+def get_workflow_pipeline() -> WorkflowGenerationPipeline:
+    return workflow_generation_pipeline
 
 
 preview_service = MockPreviewService(Path("mock/previews"))
@@ -34,8 +42,32 @@ async def create_generation_job(
     return GenerationResponse(job_id=job.job_id, status=job.status)
 
 
+@router.post("/workflows/generate", response_model=GenerationResponse)
+async def create_workflow_generation_job(
+    payload: GenerationRequest,
+    background_tasks: BackgroundTasks,
+    workflow_pipeline: WorkflowGenerationPipeline = Depends(get_workflow_pipeline),
+) -> GenerationResponse:
+    job = workflow_pipeline.enqueue(payload, background_tasks)
+    return GenerationResponse(job_id=job.job_id, status=job.status)
+
+
 @router.get("/generate/{job_id}", response_model=GenerationStatusResponse)
 async def get_generation_job(job_id: str) -> GenerationStatusResponse:
+    job = job_registry.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return GenerationStatusResponse(
+        job_id=job.job_id,
+        status=job.status,
+        steps=job.steps,
+        download_url=job.download_url,
+        metadata=job.metadata or None,
+    )
+
+
+@router.get("/workflows/generate/{job_id}", response_model=GenerationStatusResponse)
+async def get_workflow_generation_job(job_id: str) -> GenerationStatusResponse:
     job = job_registry.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
