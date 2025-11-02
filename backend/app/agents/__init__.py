@@ -1,34 +1,36 @@
 """LLM agent package exposing structured agent classes."""
 
 from .base import StructuredLLMAgent
-from .models import (
-    AppTypeClassificationResult,
-    ComponentPlacement,
-    ComponentSelectionResult,
-    DataFlowDesignResult,
-    RequirementsDecompositionResult,
-    ValidationResult,
-)
 from .llm_agents import (
-    RequirementsDecompositionAgent,
-    AppTypeClassificationAgent,
-    ComponentSelectionAgent,
-    DataFlowDesignAgent,
-    SpecificationValidatorAgent,
+    AnalystAgent,
+    ArchitectAgent,
+    WorkflowSpecialistAgent,
+    WorkflowValidatorAgent,
+)
+from .models import (
+    AnalystRequirement,
+    AnalystResult,
+    ArchitecturePlan,
+    PipelineStepPlan,
+    UIStepPlan,
+    ValidatorFeedback,
+    WorkflowDraft,
+    WorkflowReferencePlan,
 )
 
 __all__ = [
     "StructuredLLMAgent",
-    "RequirementsDecompositionAgent",
-    "AppTypeClassificationAgent",
-    "ComponentSelectionAgent",
-    "DataFlowDesignAgent",
-    "SpecificationValidatorAgent",
-    "RequirementsDecompositionResult",
-    "AppTypeClassificationResult",
-    "ComponentSelectionResult",
-    "DataFlowDesignResult",
-    "ValidationResult",
-    "ComponentPlacement",
+    "AnalystAgent",
+    "ArchitectAgent",
+    "WorkflowSpecialistAgent",
+    "WorkflowValidatorAgent",
+    "AnalystResult",
+    "AnalystRequirement",
+    "ArchitecturePlan",
+    "WorkflowReferencePlan",
+    "UIStepPlan",
+    "PipelineStepPlan",
+    "WorkflowDraft",
+    "ValidatorFeedback",
 ]
 

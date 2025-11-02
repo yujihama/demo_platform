@@ -2,21 +2,9 @@ from __future__ import annotations
 
 from typing import Any, List
 
-from backend.app.agents import (
-    AppTypeClassificationAgent,
-    ComponentSelectionAgent,
-    DataFlowDesignAgent,
-    RequirementsDecompositionAgent,
-    SpecificationValidatorAgent,
-)
-from backend.app.agents.models import (
-    AppTypeClassificationResult,
-    ComponentSelectionResult,
-    DataFlowDesignResult,
-    RequirementsDecompositionResult,
-)
+from backend.app.agents import AnalystAgent, ArchitectAgent, WorkflowSpecialistAgent, WorkflowValidatorAgent
+from backend.app.agents.models import AnalystResult, ArchitecturePlan, WorkflowDraft, ValidatorFeedback
 from backend.app.services.llm_factory import RetryPolicy
-from backend.app.services.ui_catalog import load_ui_catalog
 
 
 class FakeLLM:
@@ -38,184 +26,133 @@ class FakeLLM:
         return _FakeRunnable()
 
 
-def test_requirements_decomposition_agent_returns_model() -> None:
+def test_analyst_agent_returns_result() -> None:
     fake_llm = FakeLLM(
         [
             {
-                "summary": "Automated validation workflow",
-                "primary_goal": "Validate records quickly",
+                "primary_goal": "?????????",
+                "domain_context": "????????????",
                 "requirements": [
                     {
-                        "id": "VAL-1",
-                        "category": "INPUT",
-                        "title": "Capture record",
-                        "description": "Allow operators to capture record IDs",
-                        "acceptance_criteria": ["Supports multiple records"],
+                        "id": "REQ-1",
+                        "title": "??????????????",
+                        "detail": "PDF??????????????????",
+                        "category": "input",
+                        "acceptance_criteria": ["PDF????"]
                     }
                 ],
+                "risks": ["LLM?????"],
+                "sample_inputs": ["invoice-001.pdf"],
             }
         ]
     )
 
-    agent = RequirementsDecompositionAgent(fake_llm, RetryPolicy())
-    result = agent.run("Validate the submitted record against business rules")
+    agent = AnalystAgent(fake_llm, RetryPolicy())
+    result = agent.run("????????????")
 
-    assert isinstance(result, RequirementsDecompositionResult)
-    assert result.summary == "Automated validation workflow"
-    assert result.requirements[0].id == "VAL-1"
+    assert isinstance(result, AnalystResult)
+    assert result.primary_goal == "?????????"
+    assert result.requirements[0].id == "REQ-1"
 
 
-def test_app_type_classification_agent_uses_structured_output() -> None:
+def test_architect_agent_creates_plan() -> None:
     fake_llm = FakeLLM(
         [
             {
-                "app_type": "TYPE_VALIDATION",
-                "confidence": 0.9,
-                "rationale": "Keyword match",
-                "recommended_template": "validation-workflow-basic",
-                "supporting_requirements": ["VAL-1"],
-            }
-        ]
-    )
-    agent = AppTypeClassificationAgent(fake_llm, RetryPolicy())
-    requirements = RequirementsDecompositionResult(
-        summary="Validation workflow",
-        primary_goal="Ensure data quality",
-        requirements=[],
-    )
-
-    result = agent.run(requirements)
-
-    assert isinstance(result, AppTypeClassificationResult)
-    assert result.app_type == "TYPE_VALIDATION"
-    assert result.recommended_template == "validation-workflow-basic"
-
-
-def test_component_selection_agent_returns_components() -> None:
-    fake_llm = FakeLLM(
-        [
-            {
-                "layout_hints": ["single_column"],
-                "components": [
+                "title": "???????",
+                "summary": "????????????2????",
+                "ui_steps": [
                     {
-                        "component_id": "text_input",
-                        "slot": "main",
-                        "props": {"label": "Record ID", "binding": "record_id", "required": True},
-                        "fulfills": ["VAL-1"],
+                        "id": "upload_step",
+                        "title": "??????",
+                        "description": "PDF???",
+                        "components": ["invoice_upload"],
+                        "success_transition": "result_step",
                     }
                 ],
-            }
-        ]
-    )
-    catalog = load_ui_catalog()
-    agent = ComponentSelectionAgent(fake_llm, RetryPolicy())
-
-    requirements = RequirementsDecompositionResult(
-        summary="Validation workflow",
-        primary_goal="Ensure data quality",
-        requirements=[],
-    )
-    classification = AppTypeClassificationResult(
-        app_type="TYPE_VALIDATION",
-        confidence=0.9,
-        rationale="Keyword match",
-        recommended_template="validation-workflow-basic",
-        supporting_requirements=["VAL-1"],
-    )
-
-    result = agent.run(requirements, classification, catalog)
-
-    assert isinstance(result, ComponentSelectionResult)
-    assert result.components[0].component_id == "text_input"
-
-
-def test_data_flow_design_agent_returns_flow() -> None:
-    fake_llm = FakeLLM(
-        [
-            {
-                "state": [{"name": "record_id", "type": "str", "initial_value": None}],
-                "flows": [
+                "pipeline": [
                     {
-                        "step": "validate",
-                        "trigger": "submit_button.onClick",
-                        "source_component": "text_input",
-                        "target_component": "validation_summary",
-                        "action": "validate_record",
-                        "description": "Validate the record",
-                        "requirement_refs": ["VAL-1"],
+                        "id": "call_validation",
+                        "type": "call_workflow",
+                        "description": "Dify???",
+                        "uses_provider": "dify_invoice",
+                        "inputs": ["file_url"],
+                        "outputs": ["result"],
                     }
                 ],
-            }
-        ]
-    )
-    agent = DataFlowDesignAgent(fake_llm, RetryPolicy())
-
-    requirements = RequirementsDecompositionResult(
-        summary="Validation workflow",
-        primary_goal="Ensure data quality",
-        requirements=[],
-    )
-    classification = AppTypeClassificationResult(
-        app_type="TYPE_VALIDATION",
-        confidence=0.9,
-        rationale="Keyword match",
-        recommended_template="validation-workflow-basic",
-        supporting_requirements=["VAL-1"],
-    )
-    components = ComponentSelectionResult(layout_hints=[], components=[])
-
-    result = agent.run(requirements, classification, components)
-
-    assert isinstance(result, DataFlowDesignResult)
-    assert result.flows[0].step == "validate"
-
-
-def test_validator_agent_returns_success() -> None:
-    fake_llm = FakeLLM(
-        [
-            {
-                "success": True,
-                "errors": [],
-            }
-        ]
-    )
-    catalog = load_ui_catalog()
-    agent = SpecificationValidatorAgent(fake_llm, RetryPolicy())
-
-    requirements = RequirementsDecompositionResult(summary="", primary_goal="", requirements=[])
-    components = ComponentSelectionResult(layout_hints=[], components=[])
-    flows = DataFlowDesignResult(state=[], flows=[])
-
-    result = agent.run(requirements, components, flows, catalog)
-
-    assert result.success is True
-    assert result.errors == []
-
-
-def test_validator_agent_bubbles_errors() -> None:
-    fake_llm = FakeLLM(
-        [
-            {
-                "success": False,
-                "errors": [
+                "workflows": [
                     {
-                        "code": "missing-component",
-                        "message": "Component is not in catalog",
-                        "hint": "Ensure the component ID exists",
-                        "level": "error",
+                        "id": "dify_invoice",
+                        "provider_type": "dify",
+                        "endpoint": "https://api.example/workflows",
+                        "description": "????????",
                     }
                 ],
             }
         ]
     )
-    catalog = load_ui_catalog()
-    agent = SpecificationValidatorAgent(fake_llm, RetryPolicy())
+    analysis = AnalystResult(
+        primary_goal="?????",
+        domain_context="",
+        requirements=[],
+        risks=[],
+        sample_inputs=[],
+    )
 
-    requirements = RequirementsDecompositionResult(summary="", primary_goal="", requirements=[])
-    components = ComponentSelectionResult(layout_hints=[], components=[])
-    flows = DataFlowDesignResult(state=[], flows=[])
+    agent = ArchitectAgent(fake_llm, RetryPolicy())
+    plan = agent.run(analysis)
 
-    result = agent.run(requirements, components, flows, catalog)
+    assert isinstance(plan, ArchitecturePlan)
+    assert plan.ui_steps[0].id == "upload_step"
+    assert plan.pipeline[0].uses_provider == "dify_invoice"
 
-    assert result.success is False
-    assert result.errors[0].code == "missing-component"
+
+def test_workflow_specialist_agent_emits_yaml() -> None:
+    fake_llm = FakeLLM(
+        [
+            {
+                "workflow_yaml": "version: '1'\ninfo:\n  name: demo\n",
+                "notes": ["YAML?????????"],
+            }
+        ]
+    )
+    analysis = AnalystResult(
+        primary_goal="?????",
+        domain_context="",
+        requirements=[],
+        risks=[],
+        sample_inputs=[],
+    )
+    plan = ArchitecturePlan(
+        title="demo",
+        summary="",
+        ui_steps=[],
+        pipeline=[],
+        workflows=[],
+    )
+
+    agent = WorkflowSpecialistAgent(fake_llm, RetryPolicy())
+    draft = agent.run(analysis, plan, feedback=None)
+
+    assert isinstance(draft, WorkflowDraft)
+    assert "version" in draft.workflow_yaml
+    assert draft.notes == ["YAML?????????"]
+
+
+def test_workflow_validator_agent_returns_feedback() -> None:
+    fake_llm = FakeLLM(
+        [
+            {
+                "is_valid": False,
+                "errors": ["provider id ???"],
+                "suggestions": ["workflows ?????? provider ???"]
+            }
+        ]
+    )
+
+    agent = WorkflowValidatorAgent(fake_llm, RetryPolicy())
+    feedback = agent.run(errors="missing provider", metadata="goal: demo")
+
+    assert isinstance(feedback, ValidatorFeedback)
+    assert feedback.is_valid is False
+    assert feedback.suggestions[0].startswith("workflows")

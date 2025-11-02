@@ -35,11 +35,10 @@ class MockStructuredChatModel:
     """Deterministic mock chat model used to simulate LLM responses."""
 
     def __init__(self) -> None:
-        self._last_prompt: str = ""
-        self._app_type: str = "TYPE_DOCUMENT_PROCESSOR"
-        self._requirements: Dict[str, Any] | None = None
-        self._components: Dict[str, Any] | None = None
-        self._validation_attempts = 0
+        self._analysis: Dict[str, Any] | None = None
+        self._plan: Dict[str, Any] | None = None
+        self._workflow_attempts = 0
+        self._validator_attempts = 0
         self._force_retry = False
         self._force_failure = False
 
@@ -54,264 +53,256 @@ class MockStructuredChatModel:
 
     def _invoke(self, output_model: Any, prompt_value: Any) -> Any:  # noqa: ANN401
         name = getattr(output_model, "__name__", "")
-        text = self._extract_text(prompt_value)
-        if name == "RequirementsDecompositionResult":
-            return output_model(**self._build_requirements(text))
-        if name == "AppTypeClassificationResult":
-            return output_model(**self._build_classification())
-        if name == "ComponentSelectionResult":
-            result = self._build_components()
-            self._components = result
-            return output_model(**result)
-        if name == "DataFlowDesignResult":
-            return output_model(**self._build_data_flow())
-        if name == "ValidationResult":
-            return output_model(**self._build_validation())
+        prompt_text = self._extract_text(prompt_value)
+        if prompt_text:
+            self._update_prompt_flags(prompt_text)
+        if name == "AnalystResult":
+            return self._mock_analysis(output_model)
+        if name == "ArchitecturePlan":
+            return self._mock_plan(output_model)
+        if name == "WorkflowDraft":
+            return self._mock_workflow_draft(output_model)
+        if name == "ValidatorFeedback":
+            return self._mock_validator_feedback(output_model, prompt_text)
         raise ValueError(f"Unsupported mock structured output model: {name}")
 
     @staticmethod
-    def _extract_text(prompt_value: Any) -> str:  # noqa: ANN401
+    def _extract_text(prompt_value: Any) -> str:
+        """Best-effort extraction of the final message text from the prompt."""
+
         try:
             messages = prompt_value.messages  # type: ignore[attr-defined]
-            if messages:
-                content = messages[-1].content
-                if isinstance(content, str):
-                    return content
-                if isinstance(content, list):
-                    parts = []
-                    for item in content:
-                        if isinstance(item, dict) and "text" in item:
-                            parts.append(str(item["text"]))
-                    return "\n".join(parts)
         except AttributeError:
-            pass
+            return str(prompt_value)
+
+        if not messages:
+            return str(prompt_value)
+
+        content = messages[-1].content
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, dict) and "text" in item:
+                    parts.append(str(item["text"]))
+            if parts:
+                return "\n".join(parts)
         return str(prompt_value)
 
-    def _build_requirements(self, formatted_prompt: str) -> Dict[str, Any]:
-        prompt = self._parse_user_prompt(formatted_prompt)
-        self._last_prompt = prompt
-        lowered = prompt.lower()
-        self._app_type = (
-            "TYPE_VALIDATION"
-            if any(keyword in lowered for keyword in ["validate", "validation", "quality", "review", "check"])
-            else "TYPE_DOCUMENT_PROCESSOR"
-        )
+    def _update_prompt_flags(self, prompt_text: str) -> None:
+        lowered = prompt_text.lower()
         self._force_retry = "force retry" in lowered
         self._force_failure = "force failure" in lowered
-        self._validation_attempts = 0
 
-        if self._app_type == "TYPE_VALIDATION":
-            requirements = [
-                {
-                    "id": "VAL-1",
-                    "category": "INPUT",
-                    "title": "Capture validation request",
-                    "description": "Allow operators to provide record identifiers and optional context for validation.",
-                    "acceptance_criteria": ["Supports multiple record identifiers in a single submission"],
-                },
-                {
-                    "id": "VAL-2",
-                    "category": "PROCESSING",
-                    "title": "Run business rule checks",
-                    "description": "Execute business rules and thresholds against submitted data.",
-                    "acceptance_criteria": ["Validation completes within five seconds", "Returns failing rules with severity"],
-                },
-                {
-                    "id": "VAL-3",
-                    "category": "OUTPUT",
-                    "title": "Present validation result",
-                    "description": "Summarise pass/fail status and recommended next steps for the operator.",
-                    "acceptance_criteria": ["Clearly highlight critical failures"],
-                },
-            ]
-            summary = "Automated validation workflow for business data"
-            primary_goal = "Validate incoming records against business rules and surface issues quickly"
-        else:
-            requirements = [
+    def _mock_analysis(self, model: Any) -> Any:  # noqa: ANN401
+        analysis = {
+            "primary_goal": "?????????",
+            "domain_context": "?????????",
+            "requirements": [
                 {
                     "id": "REQ-1",
-                    "category": "INPUT",
-                    "title": "Upload invoice document",
-                    "description": "Allow users to upload invoice documents in PDF or image format.",
-                    "acceptance_criteria": ["Supports PDF and image formats"],
+                    "title": "??????????",
+                    "detail": "????????PDF??????????",
+                    "category": "input",
+                    "acceptance_criteria": ["PDF????????"],
                 },
                 {
                     "id": "REQ-2",
-                    "category": "PROCESSING",
-                    "title": "Extract invoice fields",
-                    "description": "Parse uploaded invoices to extract vendor, amount, date, and currency fields.",
-                    "acceptance_criteria": ["Returns structured JSON with extracted fields"],
+                    "title": "AI???",
+                    "detail": "?????????????AI????????",
+                    "category": "process",
+                    "acceptance_criteria": ["??????????????"],
                 },
                 {
                     "id": "REQ-3",
-                    "category": "OUTPUT",
-                    "title": "Display validation summary",
-                    "description": "Expose extracted values and anomalies for finance reviewers to confirm.",
-                    "acceptance_criteria": ["Highlights anomalies in the summary"],
+                    "title": "?????",
+                    "detail": "??????????????",
+                    "category": "output",
+                    "acceptance_criteria": ["????????????"],
                 },
-            ]
-            summary = "Automated document processing workflow for invoices"
-            primary_goal = "Automate extraction and validation of invoice data"
-
-        result = {
-            "summary": summary,
-            "primary_goal": primary_goal,
-            "requirements": requirements,
+            ],
+            "risks": ["Dify API ??????"],
+            "sample_inputs": ["invoice-001.pdf"],
         }
-        self._requirements = result
-        return result
+        self._analysis = analysis
+        return model(**analysis)
 
-    def _build_classification(self) -> Dict[str, Any]:
-        supporting = [req["id"] for req in (self._requirements or {}).get("requirements", [])]
-        template = (
-            "validation-workflow-basic"
-            if self._app_type == "TYPE_VALIDATION"
-            else "document-processor-basic"
-        )
-        return {
-            "app_type": self._app_type,
-            "confidence": 0.92,
-            "rationale": "Keyword based classification",
-            "recommended_template": template,
-            "supporting_requirements": supporting,
-        }
-
-    def _build_components(self) -> Dict[str, Any]:
-        if self._app_type == "TYPE_VALIDATION":
-            components = [
+    def _mock_plan(self, model: Any) -> Any:  # noqa: ANN401
+        plan = {
+            "title": "????????",
+            "summary": "?????????????2??????",
+            "ui_steps": [
                 {
-                    "component_id": "text_input",
-                    "slot": "main",
-                    "props": {"label": "Record ID", "binding": "record_id", "required": True},
-                    "fulfills": ["VAL-1"],
+                    "id": "upload_step",
+                    "title": "??????",
+                    "description": "???PDF??????",
+                    "components": ["invoice_upload", "run_button"],
+                    "success_transition": "result_step",
                 },
                 {
-                    "component_id": "text_input",
-                    "slot": "main",
-                    "props": {"label": "Description", "binding": "description", "required": False},
-                    "fulfills": ["VAL-1"],
+                    "id": "result_step",
+                    "title": "????",
+                    "description": "????????????",
+                    "components": ["result_table"],
+                    "success_transition": None,
+                },
+            ],
+            "pipeline": [
+                {
+                    "id": "call_validation",
+                    "type": "call_workflow",
+                    "description": "Dify??????????????",
+                    "uses_provider": "dify_invoice",
+                    "inputs": ["file_url"],
+                    "outputs": ["validation_result"],
                 },
                 {
-                    "component_id": "submit_button",
-                    "slot": "footer",
-                    "props": {"label": "Run Validation", "action": "validate_record"},
-                    "fulfills": ["VAL-2"],
+                    "id": "summarise_result",
+                    "type": "transform",
+                    "description": "?????UI?????",
+                    "uses_provider": None,
+                    "inputs": ["validation_result"],
+                    "outputs": ["summary"],
                 },
+            ],
+            "workflows": [
                 {
-                    "component_id": "validation_summary",
-                    "slot": "main",
-                    "props": {"title": "Validation Result", "binding": "validation_summary"},
-                    "fulfills": ["VAL-3"],
-                },
-            ]
-        else:
-            components = [
-                {
-                    "component_id": "file_upload",
-                    "slot": "main",
-                    "props": {
-                        "label": "Invoice File",
-                        "binding": "invoice_file",
-                        "accept": ["application/pdf", "image/png"],
-                    },
-                    "fulfills": ["REQ-1"],
-                },
-                {
-                    "component_id": "submit_button",
-                    "slot": "footer",
-                    "props": {"label": "Run Extraction", "action": "process_invoice"},
-                    "fulfills": ["REQ-2"],
-                },
-                {
-                    "component_id": "validation_summary",
-                    "slot": "main",
-                    "props": {"title": "Validation Summary", "binding": "validation_summary"},
-                    "fulfills": ["REQ-3"],
-                },
-            ]
-
-        return {
-            "layout_hints": ["single_column"],
-            "components": components,
-        }
-
-    def _build_data_flow(self) -> Dict[str, Any]:
-        if self._app_type == "TYPE_VALIDATION":
-            state = [
-                {"name": "record_id", "type": "str", "initial_value": None},
-                {"name": "description", "type": "str", "initial_value": ""},
-                {"name": "validation_summary", "type": "dict", "initial_value": None},
-            ]
-            flows = [
-                {
-                    "step": "run-validation",
-                    "trigger": "submit_button.onClick",
-                    "source_component": "text_input",
-                    "target_component": "validation_summary",
-                    "action": "validate_record",
-                    "description": "Send the request to the validation service and display the response.",
-                    "requirement_refs": ["VAL-2", "VAL-3"],
+                    "id": "dify_invoice",
+                    "provider_type": "dify",
+                    "endpoint": "https://mock.dify/api",
+                    "description": "????????",
                 }
-            ]
-        else:
-            state = [
-                {"name": "invoice_file", "type": "file", "initial_value": None},
-                {"name": "validation_summary", "type": "dict", "initial_value": None},
-            ]
-            flows = [
-                {
-                    "step": "extract-invoice",
-                    "trigger": "submit_button.onClick",
-                    "source_component": "file_upload",
-                    "target_component": "validation_summary",
-                    "action": "extract_and_validate",
-                    "description": "Parse the uploaded invoice and update the validation summary.",
-                    "requirement_refs": ["REQ-2", "REQ-3"],
-                }
-            ]
+            ],
+        }
+        self._plan = plan
+        return model(**plan)
 
-        return {"state": state, "flows": flows}
-
-    def _build_validation(self) -> Dict[str, Any]:
+    def _mock_workflow_draft(self, model: Any) -> Any:  # noqa: ANN401
+        self._workflow_attempts += 1
         if self._force_failure:
-            return {
-                "success": False,
-                "errors": [
-                    {
-                        "code": "validation-failed",
-                        "message": "Validation is configured to always fail for testing purposes.",
-                        "hint": "Remove the phrase 'force failure' from the prompt to allow success.",
-                        "level": "error",
-                    }
-                ],
-            }
+            yaml = self._build_invalid_yaml("failure")
+            notes = ["'force failure' ??workflow.yaml??????????"]
+            return model(workflow_yaml=yaml, notes=notes)
 
-        if self._force_retry and self._validation_attempts == 0:
-            self._validation_attempts += 1
-            return {
-                "success": False,
-                "errors": [
-                    {
-                        "code": "retry",
-                        "message": "The first validation detected a consistency issue.",
-                        "hint": "Retrying once will produce a corrected specification.",
-                        "level": "warning",
-                    }
-                ],
-            }
+        if self._force_retry and self._workflow_attempts == 1:
+            yaml = self._build_invalid_yaml("retry")
+            notes = ["?????????????????? (force retry)"]
+            return model(workflow_yaml=yaml, notes=notes)
 
-        self._validation_attempts += 1
-        return {"success": True, "errors": []}
+        yaml = self._build_valid_yaml()
+        notes = ["???LLM?????"]
+        return model(workflow_yaml=yaml, notes=notes)
 
-    @staticmethod
-    def _parse_user_prompt(section: str) -> str:
-        marker = "User prompt:"
-        if marker in section:
-            after = section.split(marker, 1)[1]
-            if "Return the structured requirements list." in after:
-                after = after.split("Return the structured requirements list.", 1)[0]
-            return after.strip()
-        return section.strip()
+    def _build_valid_yaml(self) -> str:
+        return (
+            "version: '1'\n"
+            "info:\n"
+            "  name: ???????\n"
+            "  summary: ??????????????workflow\n"
+            "  version: 1.0.0\n"
+            "workflows:\n"
+            "  - id: dify_invoice\n"
+            "    provider: dify\n"
+            "    endpoint: https://mock.dify/api\n"
+            "    method: POST\n"
+            "pipeline:\n"
+            "  - id: call_validation\n"
+            "    type: call_workflow\n"
+            "    title: ????????\n"
+            "    with:\n"
+            "      provider_id: dify_invoice\n"
+            "      input:\n"
+            "        file_url: '{{ context.upload_step.outputs.file_url }}'\n"
+            "    on_success:\n"
+            "      - summarise_result\n"
+            "  - id: summarise_result\n"
+            "    type: transform\n"
+            "    title: ????\n"
+            "    with:\n"
+            "      expression: >-\n"
+            "        {\"status\": context.call_validation.outputs.validation_result.status}\n"
+            "ui:\n"
+            "  layout: wizard\n"
+            "  steps:\n"
+            "    - id: upload_step\n"
+            "      title: ??????\n"
+            "      description: ???PDF??????\n"
+            "      components:\n"
+            "        - id: invoice_upload\n"
+            "          type: file_upload\n"
+            "          label: ???\n"
+            "        - id: run_button\n"
+            "          type: button\n"
+            "          label: ?????\n"
+            "    - id: result_step\n"
+            "      title: ??\n"
+            "      description: ???????\n"
+            "      components:\n"
+            "        - id: result_table\n"
+            "          type: table\n"
+            "          label: ????\n"
+        )
+    def _build_invalid_yaml(self, scenario: str) -> str:
+        base = (
+            "version: '1'\n"
+            "info:\n"
+            "  name: Broken Workflow\n"
+            "  summary: force scenario\n"
+            "  version: 1.0.0\n"
+            "workflows:\n"
+            "  - id: ''\n"
+            "    provider: dify\n"
+            "    endpoint: https://mock.dify/api\n"
+            "pipeline:\n"
+            "  - id: broken_step\n"
+            "    type: call_workflow\n"
+            "    title: Invalid\n"
+            "    with:\n"
+            "      provider_id: dify_invoice\n"
+            "ui:\n"
+            "  layout: wizard\n"
+            "  steps: []\n"
+        )
+        if scenario == "retry":
+            return base.replace("Broken Workflow", "Retry Workflow")
+        return base
+
+    def _mock_validator_feedback(self, model: Any, prompt_text: str) -> Any:  # noqa: ANN401
+        lowered = prompt_text.lower()
+        if self._force_failure:
+            self._validator_attempts += 1
+            return model(
+                is_valid=False,
+                errors=["force failure ?????workflow.yaml????"],
+                suggestions=["'force failure' ????????"]
+            )
+
+        if self._force_retry:
+            self._validator_attempts += 1
+            if self._validator_attempts == 1:
+                return model(
+                    is_valid=False,
+                    errors=["force retry ?????????????????????"],
+                    suggestions=["??????????workflow.yaml ??? ?????????"]
+                )
+            # Subsequent attempts succeed to simulate recovery
+            return model(
+                is_valid=True,
+                errors=[],
+                suggestions=["??????????????????????"]
+            )
+
+        if "missing" in lowered:
+            self._validator_attempts += 1
+            return model(
+                is_valid=False,
+                errors=["provider id ???"],
+                suggestions=["workflows ? provider ?????????"]
+            )
+
+        self._validator_attempts += 1
+        return model(is_valid=True, errors=[], suggestions=["zip ????????? .env ?????????"])
 
 class LLMFactory:
     def __init__(self, cfg: ConfigManager = config_manager) -> None:
