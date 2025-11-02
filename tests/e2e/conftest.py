@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from playwright.sync_api import Page
 
 from .utils.process import ManagedProcess, start_backend, start_frontend
 
@@ -79,3 +81,15 @@ def cli_generation_validation_llm(clean_output_root) -> Path:  # type: ignore[ov
     subprocess.run(cmd, check=True)
     return Path("output") / "cli-llm-validation" / "invoice-validation-llm-job"
 
+
+# Additional fixtures for Task B smoke tests
+@pytest.fixture(scope="session")
+def base_url():
+    return os.environ.get("BASE_URL", "http://localhost:5173")
+
+
+@pytest.fixture
+def page_with_base_url(page: Page, base_url: str):
+    """Page fixture that navigates to base_url for smoke tests."""
+    page.goto(base_url)
+    return page
