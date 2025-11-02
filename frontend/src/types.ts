@@ -63,3 +63,29 @@ export interface SessionExecuteRequest {
   step_id?: string | null;
   inputs: Record<string, unknown>;
 }
+
+export type ConversationStatus = "pending" | "running" | "completed" | "failed";
+
+export interface ConversationMessage {
+  role: "user" | "assistant" | "system" | string;
+  content: string;
+  created_at: string;
+}
+
+export interface ConversationCreateRequest {
+  user_id: string;
+  project_id: string;
+  project_name: string;
+  prompt: string;
+}
+
+export interface ConversationSession {
+  session_id: string;
+  status: ConversationStatus;
+  messages: ConversationMessage[];
+  workflow_yaml?: string | null;
+  metadata?: Record<string, unknown> | null;
+  error?: string | null;
+  created_at: string;
+  updated_at: string;
+}

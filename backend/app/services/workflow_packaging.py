@@ -12,55 +12,76 @@ from ..models.generation import GenerationJob
 
 class WorkflowPackagingService:
     """Packages workflow.yaml-based applications with docker-compose.yml and .env templates."""
-    
+
     def __init__(self, output_root: Path) -> None:
         self._output_root = output_root
         self._output_root.mkdir(parents=True, exist_ok=True)
-    
+
     def package_workflow_app(
         self,
         job: GenerationJob,
         workflow_yaml: str,
         metadata: Dict[str, Any] | None = None,
     ) -> Path:
-        """
-        Package a workflow.yaml-based application.
-        
-        Creates a zip file containing:
-        - workflow.yaml
-        - docker-compose.yml (generic template)
-        - .env.example (template with placeholders)
-        - README.md (instructions)
-        """
-        target_dir = self._output_root / job.user_id / job.project_id
+        return self._package(
+            user_id=job.user_id,
+            project_id=job.project_id,
+            project_name=job.project_name,
+            description=job.description,
+            workflow_yaml=workflow_yaml,
+            metadata=metadata,
+        )
+
+    def package_conversation(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        project_id: str,
+        project_name: str,
+        description: str,
+        workflow_yaml: str,
+        metadata: Dict[str, Any] | None = None,
+    ) -> Path:
+        return self._package(
+            user_id=user_id,
+            project_id=project_id,
+            project_name=project_name,
+            description=description,
+            workflow_yaml=workflow_yaml,
+            metadata=metadata,
+            zip_name=f"{session_id}.zip",
+        )
+
+    def _package(
+        self,
+        *,
+        user_id: str,
+        project_id: str,
+        project_name: str,
+        description: str,
+        workflow_yaml: str,
+        metadata: Dict[str, Any] | None = None,
+        zip_name: str = "app.zip",
+    ) -> Path:
+        target_dir = self._output_root / user_id / project_id
         target_dir.mkdir(parents=True, exist_ok=True)
-        
-        zip_path = target_dir / "app.zip"
-        
+
+        zip_path = target_dir / zip_name
+
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
-            # Add workflow.yaml
             zip_file.writestr("workflow.yaml", workflow_yaml.encode("utf-8"))
-            
-            # Add docker-compose.yml (generic template)
-            docker_compose_content = self._generate_docker_compose()
-            zip_file.writestr("docker-compose.yml", docker_compose_content.encode("utf-8"))
-            
-            # Add .env.example
-            env_example_content = self._generate_env_example()
-            zip_file.writestr(".env.example", env_example_content.encode("utf-8"))
-            
-            # Add README.md
-            readme_content = self._generate_readme(job.project_name, job.description)
-            zip_file.writestr("README.md", readme_content.encode("utf-8"))
-        
-        # Save metadata
+            zip_file.writestr("docker-compose.yml", self._generate_docker_compose().encode("utf-8"))
+            zip_file.writestr(".env.example", self._generate_env_example().encode("utf-8"))
+            zip_file.writestr("README.md", self._generate_readme(project_name, description).encode("utf-8"))
+
         if metadata:
             metadata_path = target_dir / "metadata.json"
             metadata_path.write_text(
                 json.dumps(metadata, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-        
+
         return zip_path
     
     def _generate_docker_compose(self) -> str:
@@ -68,42 +89,30 @@ class WorkflowPackagingService:
         return """version: "3.9"
 
 services:
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    command: npm run dev -- --host 0.0.0.0 --port ${FRONTEND_PORT:-5173}
+  runtime-engine:
+    image: ghcr.io/demo-platform/runtime-engine:latest
     env_file:
       - .env
     environment:
-      BACKEND_HOST: http://backend:8000
+      WORKFLOW_FILE: ${WORKFLOW_FILE:-/app/workflow.yaml}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     volumes:
-      - ./frontend:/app
-      - node_modules:/app/node_modules
-    ports:
-      - "${FRONTEND_PORT:-5173}:5173"
-    depends_on:
-      - backend
-
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    command: uvicorn app.main:app --host 0.0.0.0 --port ${BACKEND_PORT:-8000}
-    env_file:
-      - .env
-    environment:
-      WORKFLOW_FILE: /app/workflow.yaml
-      REDIS_URL: redis://redis:6379/0
-      DIFY_API_ENDPOINT: http://dify-mock:3000/v1
-    volumes:
-      - ./backend:/app
       - ./workflow.yaml:/app/workflow.yaml:ro
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "${RUNTIME_ENGINE_PORT:-8000}:8000"
     depends_on:
       - redis
-      - dify-mock
+
+  runtime-ui:
+    image: ghcr.io/demo-platform/runtime-ui:latest
+    env_file:
+      - .env
+    environment:
+      VITE_RUNTIME_API_URL: ${RUNTIME_API_URL:-http://runtime-engine:8000/api/runtime}
+    ports:
+      - "${RUNTIME_UI_PORT:-3000}:3000"
+    depends_on:
+      - runtime-engine
 
   redis:
     image: redis:7-alpine
@@ -112,44 +121,26 @@ services:
     volumes:
       - redis_data:/data
 
-  dify-mock:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    command: uvicorn app.mock_main:app --host 0.0.0.0 --port 3000
-    environment:
-      PYTHONPATH: /app
-    ports:
-      - "3000:3000"
-    depends_on:
-      - redis
-
 volumes:
-  node_modules: {}
   redis_data: {}
 """
     
     def _generate_env_example(self) -> str:
         """Generate .env.example template."""
-        return """# Backend Configuration
-BACKEND_PORT=8000
+        return """# Runtime Engine Configuration
 WORKFLOW_FILE=workflow.yaml
 REDIS_URL=redis://redis:6379/0
+RUNTIME_ENGINE_PORT=8000
 
-# Frontend Configuration
-FRONTEND_PORT=5173
+# Runtime UI Configuration
+RUNTIME_UI_PORT=3000
+RUNTIME_API_URL=http://runtime-engine:8000/api/runtime
 
 # Redis Configuration
 REDIS_PORT=6379
 
-# Workflow Provider Configuration
-WORKFLOW_PROVIDER=mock
-# For production, set to 'dify' and configure:
+# Optional: configure external providers (e.g. Dify)
 # WORKFLOW_PROVIDER=dify
-# DIFY_API_ENDPOINT=https://api.dify.ai/v1
-# DIFY_API_KEY=your-api-key-here
-
-# Dify API Configuration (if using dify provider)
 # DIFY_API_ENDPOINT=https://api.dify.ai/v1
 # DIFY_API_KEY=your-api-key-here
 """
@@ -160,40 +151,21 @@ WORKFLOW_PROVIDER=mock
 
 {description}
 
-## Setup
+## 使い方
 
-1. Copy `.env.example` to `.env`:
+1. `.env.example` をコピーして `.env` を作成します。
    ```bash
    cp .env.example .env
    ```
 
-2. Edit `.env` and configure:
-   - Set `WORKFLOW_PROVIDER` to `dify` for production (or keep `mock` for development)
-   - If using Dify, add your `DIFY_API_KEY` and `DIFY_API_ENDPOINT`
+2. `.env` に必要な環境変数（APIキーなど）を設定します。
 
-3. Start the application:
+3. アプリケーションを起動します。
    ```bash
-   docker-compose up -d
+   docker-compose up
    ```
 
-4. Access the application:
-   - Frontend: http://localhost:5173
-   - Backend API: http://localhost:8000
+4. ブラウザで http://localhost:3000 を開き、生成されたアプリケーションを操作します。
 
-## Stopping the Application
-
-```bash
-docker-compose down
-```
-
-## Configuration
-
-The application behavior is controlled by `workflow.yaml`. 
-This file defines:
-- Application metadata
-- UI structure and components
-- Processing pipeline steps
-- External API endpoints (workflows)
-
-To modify the application, edit `workflow.yaml` and restart the services.
+アプリの動作は `workflow.yaml` によって制御されます。内容を変更した場合は再度 `docker-compose up` を実行してください。
 """

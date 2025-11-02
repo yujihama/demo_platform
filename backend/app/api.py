@@ -5,10 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 
 from .config import config_manager
+from .models.conversation import ConversationCreateRequest, ConversationSessionResponse
 from .models.generation import GenerationRequest, GenerationResponse, GenerationStatusResponse
+from .services.conversation import ConversationService, conversation_service
 from .services.jobs import job_registry
 from .services.pipeline import GenerationPipeline, pipeline
 from .services.preview import MockPreviewService
@@ -16,6 +18,10 @@ from .services.preview import MockPreviewService
 
 def get_pipeline() -> GenerationPipeline:
     return pipeline
+
+
+def get_conversation_service() -> ConversationService:
+    return conversation_service
 
 
 preview_service = MockPreviewService(Path("mock/previews"))
@@ -68,4 +74,48 @@ async def get_preview(spec_id: str) -> HTMLResponse:
 @router.get("/config/features")
 async def get_features_config() -> dict:
     return config_manager.features.model_dump()
+
+
+@router.post("/generate/conversations", response_model=ConversationSessionResponse)
+async def start_conversation(
+    payload: ConversationCreateRequest,
+    background_tasks: BackgroundTasks,
+    service: ConversationService = Depends(get_conversation_service),
+) -> ConversationSessionResponse:
+    return service.start(payload, background_tasks)
+
+
+@router.get("/generate/conversations/{session_id}", response_model=ConversationSessionResponse)
+async def get_conversation(session_id: str, service: ConversationService = Depends(get_conversation_service)) -> ConversationSessionResponse:
+    try:
+        return service.get(session_id)
+    except KeyError as exc:  # noqa: PERF203
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/generate/conversations/{session_id}/workflow", response_class=PlainTextResponse)
+async def get_conversation_workflow(
+    session_id: str,
+    service: ConversationService = Depends(get_conversation_service),
+) -> PlainTextResponse:
+    try:
+        content = service.get_workflow_yaml(session_id)
+    except KeyError as exc:  # noqa: PERF203
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return PlainTextResponse(content, media_type="text/yaml")
+
+
+@router.post("/generate/conversations/{session_id}/package")
+async def download_conversation_package(
+    session_id: str,
+    service: ConversationService = Depends(get_conversation_service),
+) -> FileResponse:
+    try:
+        package_path = service.package(session_id)
+    except KeyError as exc:  # noqa: PERF203
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    filename = Path(package_path).name
+    return FileResponse(path=package_path, filename=filename, media_type="application/zip")
 

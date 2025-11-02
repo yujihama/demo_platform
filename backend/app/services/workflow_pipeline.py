@@ -9,23 +9,17 @@ from uuid import uuid4
 
 from fastapi import BackgroundTasks
 
-from ..agents.workflow_agents import (
-    AnalystAgent,
-    ArchitectAgent,
-    YAMLSpecialistAgent,
-)
-from ..services.workflow_validator import SelfCorrectionLoop, WorkflowValidator
-from ..services.workflow_packaging import WorkflowPackagingService
 from ..models.generation import GenerationJob, GenerationRequest, JobStatus, StepStatus
 from ..services.jobs import JobRegistry, job_registry
-from ..services.llm_factory import llm_factory
+from ..services.workflow_generation import WorkflowGenerationResult, WorkflowGenerator
+from ..services.workflow_packaging import WorkflowPackagingService
 
 logger = logging.getLogger(__name__)
 
 
 class WorkflowGenerationPipeline:
     """Pipeline for generating workflow.yaml using multi-agent LLM workflow."""
-    
+
     def __init__(
         self,
         jobs: JobRegistry = job_registry,
@@ -35,11 +29,10 @@ class WorkflowGenerationPipeline:
         self._jobs = jobs
         self._working_root = working_root
         self._working_root.mkdir(parents=True, exist_ok=True)
-        
-        self._llm_factory = llm_factory
-        self._validator = WorkflowValidator(llm_factory)
+
+        self._generator = WorkflowGenerator()
         self._packaging = WorkflowPackagingService(output_root)
-    
+
     def enqueue(
         self,
         request: GenerationRequest,
@@ -48,17 +41,17 @@ class WorkflowGenerationPipeline:
         """Enqueue a workflow generation job."""
         job_id = str(uuid4())
         step_definitions = [
-            ("analysis", "????"),
-            ("architecture", "?????????"),
-            ("yaml_generation", "YAML??"),
-            ("validation", "???????"),
-            ("packaging", "???????"),
+            ("analysis", "要件分析"),
+            ("architecture", "アーキテクチャ設計"),
+            ("yaml_generation", "workflow.yaml生成"),
+            ("validation", "検証"),
+            ("packaging", "パッケージング"),
         ]
         job = self._jobs.create_job(job_id, request, step_definitions)
         background_tasks.add_task(self._run_job, job.job_id, request)
         logger.info("Enqueued workflow generation job %s", job_id)
         return job
-    
+
     def _run_job(
         self,
         job_id: str,
@@ -67,168 +60,147 @@ class WorkflowGenerationPipeline:
     ) -> None:
         """Execute workflow generation job."""
         workspace = self._working_root / job_id
-        
+
         if workspace.exists():
             import shutil
+
             shutil.rmtree(workspace)
         workspace.mkdir(parents=True, exist_ok=True)
-        
+
+        prompt = (request.requirements_prompt or request.description or "").strip()
+        if not prompt:
+            raise ValueError("requirements_prompt または description が必要です")
+
         try:
-            # Step 1: Analysis
             self._jobs.update_status(
                 job_id,
                 step_id="analysis",
                 job_status=JobStatus.SPEC_GENERATING,
                 step_status=StepStatus.RUNNING,
-                message="??????????",
+                message="要件を分析しています",
             )
             self._notify(job_id, progress_callback)
-            
-            prompt = (request.requirements_prompt or request.description or "").strip()
-            if not prompt:
-                raise ValueError("requirements_prompt ??? description ?????")
-            
-            llm = self._llm_factory.create_chat_model()
-            retry_policy = self._llm_factory.get_retry_policy()
-            
-            analyst = AnalystAgent(llm, retry_policy)
-            analysis_result = analyst.run(prompt)
-            
-            self._jobs.update_status(
-                job_id,
-                step_id="analysis",
-                job_status=JobStatus.SPEC_GENERATING,
-                step_status=StepStatus.COMPLETED,
-                message="???????????",
-            )
-            self._notify(job_id, progress_callback)
-            
-            # Step 2: Architecture
-            self._jobs.update_status(
-                job_id,
-                step_id="architecture",
-                job_status=JobStatus.SPEC_GENERATING,
-                step_status=StepStatus.RUNNING,
-                message="???????????????",
-            )
-            self._notify(job_id, progress_callback)
-            
-            architect = ArchitectAgent(llm, retry_policy)
-            architecture_result = architect.run(analysis_result)
-            
-            self._jobs.update_status(
-                job_id,
-                step_id="architecture",
-                job_status=JobStatus.SPEC_GENERATING,
-                step_status=StepStatus.COMPLETED,
-                message="????????????????",
-            )
-            self._notify(job_id, progress_callback)
-            
-            # Step 3: YAML Generation with Self-Correction
-            self._jobs.update_status(
-                job_id,
-                step_id="yaml_generation",
-                job_status=JobStatus.SPEC_GENERATING,
-                step_status=StepStatus.RUNNING,
-                message="workflow.yaml????????",
-            )
-            self._notify(job_id, progress_callback)
-            
-            correction_loop = SelfCorrectionLoop(
-                self._llm_factory,
-                self._validator,
-                max_iterations=3,
-            )
-            
-            yaml_content, success, errors = correction_loop.generate_with_correction(
-                analysis_result,
-                architecture_result,
-            )
-            
-            if not success:
-                raise RuntimeError(f"YAML?????????: {'; '.join(errors)}")
-            
-            self._jobs.update_status(
-                job_id,
-                step_id="yaml_generation",
-                job_status=JobStatus.SPEC_GENERATING,
-                step_status=StepStatus.COMPLETED,
-                message="workflow.yaml??????????",
-            )
-            self._notify(job_id, progress_callback)
-            
-            # Step 4: Validation
-            self._jobs.update_status(
-                job_id,
-                step_id="validation",
-                job_status=JobStatus.SPEC_GENERATING,
-                step_status=StepStatus.RUNNING,
-                message="?????????????????",
-            )
-            self._notify(job_id, progress_callback)
-            
-            validation_result = self._validator.validate_complete(yaml_content)
-            if not validation_result["valid"]:
-                raise RuntimeError(
-                    f"??????????: {'; '.join(validation_result['all_errors'])}"
+
+            def handle_analysis(_: Any) -> None:
+                self._jobs.update_status(
+                    job_id,
+                    step_id="analysis",
+                    job_status=JobStatus.SPEC_GENERATING,
+                    step_status=StepStatus.COMPLETED,
+                    message="要件分析が完了しました",
                 )
-            
-            self._jobs.update_status(
-                job_id,
-                step_id="validation",
-                job_status=JobStatus.SPEC_GENERATING,
-                step_status=StepStatus.COMPLETED,
-                message="??????????????",
+                self._jobs.update_status(
+                    job_id,
+                    step_id="architecture",
+                    job_status=JobStatus.SPEC_GENERATING,
+                    step_status=StepStatus.RUNNING,
+                    message="アーキテクチャを設計しています",
+                )
+                self._notify(job_id, progress_callback)
+
+            def handle_architecture(_: Any) -> None:
+                self._jobs.update_status(
+                    job_id,
+                    step_id="architecture",
+                    job_status=JobStatus.SPEC_GENERATING,
+                    step_status=StepStatus.COMPLETED,
+                    message="アーキテクチャ設計が完了しました",
+                )
+                self._jobs.update_status(
+                    job_id,
+                    step_id="yaml_generation",
+                    job_status=JobStatus.SPEC_GENERATING,
+                    step_status=StepStatus.RUNNING,
+                    message="workflow.yamlを生成しています",
+                )
+                self._notify(job_id, progress_callback)
+
+            def handle_yaml(_: str) -> None:
+                self._jobs.update_status(
+                    job_id,
+                    step_id="yaml_generation",
+                    job_status=JobStatus.SPEC_GENERATING,
+                    step_status=StepStatus.COMPLETED,
+                    message="workflow.yamlの生成が完了しました",
+                )
+                self._jobs.update_status(
+                    job_id,
+                    step_id="validation",
+                    job_status=JobStatus.SPEC_GENERATING,
+                    step_status=StepStatus.RUNNING,
+                    message="検証を実行しています",
+                )
+                self._notify(job_id, progress_callback)
+
+            def handle_validation(_: Dict[str, Any]) -> None:
+                self._jobs.update_status(
+                    job_id,
+                    step_id="validation",
+                    job_status=JobStatus.SPEC_GENERATING,
+                    step_status=StepStatus.COMPLETED,
+                    message="検証が完了しました",
+                )
+                self._notify(job_id, progress_callback)
+
+            result = self._generator.generate(
+                prompt,
+                on_analysis=handle_analysis,
+                on_architecture=handle_architecture,
+                on_yaml=handle_yaml,
+                on_validation=handle_validation,
             )
-            self._notify(job_id, progress_callback)
-            
-            # Step 5: Packaging
+
             self._jobs.update_status(
                 job_id,
                 step_id="packaging",
                 job_status=JobStatus.PACKAGING,
                 step_status=StepStatus.RUNNING,
-                message="?????????????????????",
+                message="成果物をパッケージングしています",
             )
             self._notify(job_id, progress_callback)
-            
+
             job_snapshot = self._jobs.get(job_id)
             if job_snapshot is None:
                 raise RuntimeError("Job snapshot missing during packaging")
-            
-            validation_metadata = dict(validation_result)
-            validation_model = validation_metadata.get("model")
-            if validation_model is not None and hasattr(validation_model, "model_dump"):
-                validation_metadata["model"] = validation_model.model_dump()
 
-            metadata = {
-                "workflow_yaml": yaml_content,
-                "analysis": analysis_result.model_dump(),
-                "architecture": architecture_result.model_dump(),
-                "validation": validation_metadata,
-            }
-            
+            if result is None:
+                raise RuntimeError("Workflow generation result is missing")
+
+            metadata = self._build_metadata(result)
+
             zip_path = self._packaging.package_workflow_app(
                 job_snapshot,
-                yaml_content,
+                result.yaml_content,
                 metadata,
             )
-            
+
             download_url = f"/api/generate/{job_id}/download"
             self._jobs.complete(job_id, download_url, metadata, str(zip_path))
             self._notify(job_id, progress_callback)
-            
+
             logger.info("Workflow generation job %s completed", job_id)
-            
-        except Exception as exc:
+
+        except Exception as exc:  # noqa: PERF203
             logger.exception("Workflow generation job %s failed", job_id)
             self._jobs.fail(job_id, str(exc))
             self._notify(job_id, progress_callback)
         finally:
             import shutil
+
             shutil.rmtree(workspace, ignore_errors=True)
-    
+
+    def _build_metadata(self, result: WorkflowGenerationResult) -> Dict[str, Any]:
+        metadata = {
+            "workflow_yaml": result.yaml_content,
+            "analysis": result.analysis.model_dump() if hasattr(result.analysis, "model_dump") else result.analysis,
+            "architecture": result.architecture.model_dump() if hasattr(result.architecture, "model_dump") else result.architecture,
+            "validation": dict(result.validation),
+        }
+        validation_model = metadata["validation"].get("model")
+        if validation_model is not None and hasattr(validation_model, "model_dump"):
+            metadata["validation"]["model"] = validation_model.model_dump()
+        return metadata
+
     def _notify(
         self,
         job_id: str,
