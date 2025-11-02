@@ -48,6 +48,10 @@ class WorkflowPackagingService:
             # Add .env.example
             env_example_content = self._generate_env_example()
             zip_file.writestr(".env.example", env_example_content.encode("utf-8"))
+
+            # Provide ready-to-use .env with development defaults
+            env_content = self._generate_env_defaults()
+            zip_file.writestr(".env", env_content.encode("utf-8"))
             
             # Add README.md
             readme_content = self._generate_readme(job.project_name, job.description)
@@ -135,6 +139,20 @@ WORKFLOW_PROVIDER=mock
 # DIFY_API_KEY=your-api-key-here
 """
     
+    def _generate_env_defaults(self) -> str:
+        """Generate default .env content used by docker-compose."""
+        return """BACKEND_PORT=8000
+FRONTEND_PORT=5173
+REDIS_PORT=6379
+
+# Workflow provider configuration
+WORKFLOW_PROVIDER=mock
+
+# Uncomment and configure when using dify provider
+# DIFY_API_ENDPOINT=https://api.dify.ai/v1
+# DIFY_API_KEY=your-api-key-here
+"""
+
     def _generate_readme(self, app_name: str, description: str) -> str:
         """Generate README.md with setup instructions."""
         return f"""# {app_name}
@@ -143,10 +161,7 @@ WORKFLOW_PROVIDER=mock
 
 ## Setup
 
-1. Copy `.env.example` to `.env`:
-   ```bash
-   cp .env.example .env
-   ```
+1. 必要に応じて`.env.example`を編集し、`.env`へ反映します（デフォルトの`.env`は同梱されています）。
 
 2. Edit `.env` and configure:
    - Set `WORKFLOW_PROVIDER` to `dify` for production (or keep `mock` for development)

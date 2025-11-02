@@ -13,7 +13,7 @@ from rich.table import Table
 
 from .app.config import config_manager
 from .app.models import GenerationRequest, GenerationOptions
-from .app.services.pipeline import pipeline
+from .app.services.workflow_pipeline import workflow_pipeline
 
 console = Console()
 
@@ -110,7 +110,7 @@ def generate(config_path: Path) -> None:
     progress = ProgressPrinter()
 
     try:
-        job = pipeline.run_sync(request, progress_callback=progress)
+        job = workflow_pipeline.run_sync(request, progress_callback=progress)
     except Exception as exc:  # pragma: no cover - surfaced to user
         console.print(f"[bold red]生成に失敗しました:[/bold red] {exc}")
         raise SystemExit(1) from exc

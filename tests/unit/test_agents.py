@@ -100,7 +100,7 @@ def test_component_selection_agent_returns_components() -> None:
                     {
                         "component_id": "text_input",
                         "slot": "main",
-                        "props": {"label": "Record ID", "binding": "record_id", "required": True},
+                        "props": {"label": "Record ID", "binding": "record_id", "required": "true"},
                         "fulfills": ["VAL-1"],
                     }
                 ],
