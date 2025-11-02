@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import logging
 import re
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Sequence
 from uuid import uuid4
 
 from fastapi import BackgroundTasks
+
+import yaml
 
 from ..agents import (
     AppTypeClassificationAgent,
@@ -36,6 +39,13 @@ from .packaging import PackagingService
 from .templates import TemplateRenderer
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class WorkflowArtifact:
+    workflow: Dict[str, Any]
+    yaml_text: str
+    metadata_json: str
 
 
 MOCK_STEP_DEFINITIONS: Sequence[tuple[str, str]] = (
@@ -116,6 +126,79 @@ class GenerationPipeline:
         if final_job is None:
             raise RuntimeError("Job finished without persisted state")
         return final_job
+
+    # ------------------------------------------------------------------
+    def generate_workflow(self, request: GenerationRequest) -> WorkflowArtifact:
+        prompt = (request.requirements_prompt or request.description or "").strip()
+        if not prompt:
+            raise ValueError("workflow を生成するには requirements_prompt もしくは description が必要です")
+
+        llm = self._llm_factory.create_chat_model()
+        retry_policy: RetryPolicy = self._llm_factory.get_retry_policy()
+
+        requirements_agent = RequirementsDecompositionAgent(llm, retry_policy)
+        classification_agent = AppTypeClassificationAgent(llm, retry_policy)
+        component_agent = ComponentSelectionAgent(llm, retry_policy)
+        data_flow_agent = DataFlowDesignAgent(llm, retry_policy)
+        validator_agent = SpecificationValidatorAgent(llm, retry_policy)
+
+        requirements_result = requirements_agent.run(prompt)
+        classification_result = classification_agent.run(requirements_result)
+
+        feedback: str | None = None
+        validation_result: ValidationResult | None = None
+        component_result: ComponentSelectionResult | None = None
+        data_flow_result: DataFlowDesignResult | None = None
+
+        for _attempt in range(1, LLM_VALIDATION_MAX_ATTEMPTS + 1):
+            component_result = component_agent.run(
+                requirements_result, classification_result, self._catalog, feedback=feedback
+            )
+            data_flow_result = data_flow_agent.run(
+                requirements_result, classification_result, component_result
+            )
+            validation_result = validator_agent.run(
+                requirements_result,
+                component_result,
+                data_flow_result,
+                self._catalog,
+            )
+            if validation_result.success:
+                break
+            feedback = self._format_validation_feedback(validation_result)
+        else:
+            raise RuntimeError("LLM バリデーションに失敗しました")
+
+        assert component_result is not None
+        assert data_flow_result is not None
+        assert validation_result is not None
+
+        spec = self._build_llm_spec(
+            request,
+            prompt,
+            requirements_result,
+            classification_result,
+            component_result,
+            data_flow_result,
+            validation_result,
+        )
+
+        workflow_document = self._build_workflow_document(request, spec)
+        yaml_text = yaml.safe_dump(workflow_document, allow_unicode=True, sort_keys=False)
+
+        metadata = {
+            "request": request.model_dump(),
+            "spec": spec,
+            "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "config": self._config_manager.export_metadata(),
+        }
+        metadata_json = json.dumps(metadata, ensure_ascii=False, indent=2)
+
+        return WorkflowArtifact(
+            workflow=workflow_document,
+            yaml_text=yaml_text,
+            metadata_json=metadata_json,
+        )
 
     # ------------------------------------------------------------------
     def _run_job(
@@ -238,14 +321,14 @@ class GenerationPipeline:
             "request": request.model_dump(),
             "spec": spec,
             "config": bundle.model_dump(),
-            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
 
     def _build_metadata(self, request: GenerationRequest, spec: Dict[str, Any]) -> Dict[str, Any]:
         metadata = {
             "request": request.model_dump(),
             "spec": spec,
-            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "config": self._config_manager.export_metadata(),
         }
         return metadata
@@ -552,6 +635,168 @@ class GenerationPipeline:
             "tests": tests_spec,
             "docker": docker_spec,
         }
+
+    def _build_workflow_document(self, request: GenerationRequest, spec: Dict[str, Any]) -> Dict[str, Any]:
+        forms = spec.get("frontend", {}).get("forms", [])
+        first_form = forms[0] if forms else {}
+        fields = first_form.get("fields", [])
+
+        file_fields = [field for field in fields if field.get("type") == "file"]
+
+        info = {
+            "name": request.project_name,
+            "description": spec.get("app", {}).get("summary") or request.description,
+            "version": spec.get("app", {}).get("version", "1.0.0"),
+            "author": "Demo Platform",
+        }
+
+        workflow_endpoint = "http://dify-mock:3000/v1/workflows/invoice-validation/run"
+
+        workflow_id = "generated_pipeline"
+        workflow_providers = {
+            workflow_id: {
+                "provider": "mock",
+                "endpoint": workflow_endpoint,
+            }
+        }
+
+        input_components: List[Dict[str, Any]] = []
+        pipeline_steps: List[Dict[str, Any]] = []
+
+        if file_fields:
+            for field in file_fields:
+                raw_name = field.get("name") or field.get("label") or "input"
+                field_name = self._slugify(str(raw_name), default="input")
+                accept = field.get("options") if isinstance(field.get("options"), list) else None
+                component_id = f"input_{field_name}"
+                input_components.append(
+                    {
+                        "type": "file_upload",
+                        "id": component_id,
+                        "props": {
+                            "label": field.get("label") or field_name.capitalize(),
+                            "accept": accept,
+                        },
+                    }
+                )
+                pipeline_steps.append(
+                    {
+                        "id": f"capture_{field_name}",
+                        "component": "file_uploader",
+                        "params": {
+                            "input_id": component_id,
+                            "target": f"inputs.{component_id}",
+                            "view_path": f"steps.capture.{component_id}",
+                        },
+                    }
+                )
+        else:
+            input_components.append(
+                {
+                    "type": "alert",
+                    "id": "input_placeholder",
+                    "props": {
+                        "severity": "info",
+                        "message": "入力フィールドを推定できなかったため、モックのワークフローを生成しました。",
+                    },
+                }
+            )
+
+        action_button_id = "execute_workflow"
+        input_components.append(
+            {
+                "type": "button",
+                "id": action_button_id,
+                "props": {
+                    "label": "ワークフローを実行",
+                    "action": "submit",
+                },
+            }
+        )
+
+        pipeline_steps.append(
+            {
+                "id": "call_generated_workflow",
+                "component": "call_workflow",
+                "params": {
+                    "workflow": workflow_id,
+                    "input_mapping": {
+                        component["id"]: f"$inputs.{component['id']}"
+                        for component in input_components
+                        if component["type"] == "file_upload"
+                    },
+                    "output_path": "steps.call_generated_workflow.response",
+                    "view_path": "view.results.raw_response",
+                },
+            }
+        )
+
+        pipeline_steps.append(
+            {
+                "id": "build_result_table",
+                "component": "for_each",
+                "params": {
+                    "source": "steps.call_generated_workflow.response.outputs.items",
+                    "target": "view.results.items",
+                    "view_path": "view.results.items",
+                    "map": {
+                        "field": "{{ item.field }}",
+                        "status": "{{ item.status }}",
+                        "detail": "{{ item.detail }}",
+                    },
+                },
+            }
+        )
+
+        ui_steps: List[Dict[str, Any]] = [
+            {
+                "id": "inputs",
+                "title": first_form.get("title") or "ユーザー入力",
+                "description": first_form.get("description"),
+                "components": input_components,
+            },
+            {
+                "id": "results",
+                "title": "検出結果",
+                "description": "呼び出したワークフローの結果を表示します。",
+                "components": [
+                    {
+                        "type": "alert",
+                        "id": "results_summary",
+                        "props": {
+                            "severity": "info",
+                            "message": "結果はモックAPIから返却されています。実サービスに差し替えることで本番運用が可能です。",
+                        },
+                    },
+                    {
+                        "type": "table",
+                        "id": "results_table",
+                        "props": {
+                            "title": "結果一覧",
+                            "data_path": "view.results.items",
+                            "columns": [
+                                {"field": "field", "label": "項目"},
+                                {"field": "status", "label": "ステータス"},
+                                {"field": "detail", "label": "詳細"},
+                            ],
+                        },
+                    },
+                ],
+            },
+        ]
+
+        workflow_document = {
+            "info": info,
+            "workflows": workflow_providers,
+            "ui": {
+                "layout": "wizard",
+                "steps": ui_steps,
+            },
+            "pipeline": {
+                "steps": pipeline_steps,
+            },
+        }
+        return workflow_document
 
     def _build_frontend_fields(
         self,
